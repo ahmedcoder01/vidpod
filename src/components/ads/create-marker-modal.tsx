@@ -38,8 +38,24 @@ export function CreateMarkerModal({ onSelect, onCancel }: Props) {
   const [selected, setSelected] = useState<AdType | null>(null);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm animate-slide-in">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in"
+      style={{
+        background:
+          'radial-gradient(ellipse at center, rgba(15,15,20,0.55) 0%, rgba(8,8,12,0.72) 100%)',
+        backdropFilter: 'blur(1.5px) saturate(115%)',
+        WebkitBackdropFilter: 'blur(1.5px) saturate(115%)',
+      }}
+      onClick={onCancel}
+    >
+      <div
+        className="bg-white rounded-2xl w-full max-w-sm animate-slide-in"
+        style={{
+          boxShadow:
+            '0 24px 64px -12px rgba(0,0,0,0.35), 0 8px 24px -6px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.04)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100">
           <div>
             <h2 className="text-zinc-900 font-semibold text-sm">Create ad marker</h2>

@@ -1,14 +1,16 @@
 'use client';
 
-import { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
-import { AdMarker } from '@/lib/types';
+import { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle, useMemo } from 'react';
+import { Ad, AdMarker } from '@/lib/types';
 import { formatTime } from '@/lib/utils';
+import { SkipForward } from 'lucide-react';
 
 function clamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
 
 export interface VideoPlayerHandle {
   getCurrentTime: () => number;
   seek: (t: number) => void;
+  seekIntoAd: (markerId: string, elapsed: number) => void;
   play: () => void;
   pause: () => void;
 }
@@ -16,50 +18,170 @@ export interface VideoPlayerHandle {
 interface Props {
   src: string;
   adMarkers: AdMarker[];
+  ads: Ad[];
   onTimeUpdate?: (t: number) => void;
   onDurationChange?: (d: number) => void;
   onPlayingChange?: (playing: boolean) => void;
+  onAdProgress?: (info: { markerId: string; elapsed: number } | null) => void;
+  onError?: (message: string | null) => void;
 }
 
+type AdSession = { ad: Ad; marker: AdMarker };
+
 export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
-  { src, adMarkers, onTimeUpdate, onDurationChange, onPlayingChange },
-  ref
+  { src, adMarkers, ads, onTimeUpdate, onDurationChange, onPlayingChange, onAdProgress, onError },
+  ref,
 ) {
+  const adsById = useMemo(
+    () => Object.fromEntries(ads.map((a) => [a.id, a])) as Record<string, Ad>,
+    [ads],
+  );
+
   const videoRef = useRef<HTMLVideoElement>(null);
+  const adVideoRef = useRef<HTMLVideoElement>(null);
   const progressRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  const hitMarkers = useRef<Set<string>>(new Set());
+  const wasPlayingBeforeAd = useRef(false);
+  // When non-null, the ad-session effect reads this to pick a starting
+  // elapsed time + whether to auto-play. Cleared after consumption.
+  const pendingAdStart = useRef<{ elapsed: number; autoPlay: boolean } | null>(null);
+
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
-  const [adPlaying, setAdPlaying] = useState(false);
+  const [adSession, setAdSession] = useState<AdSession | null>(null);
+  const [adElapsed, setAdElapsed] = useState(0);
+  const [adCanSkipAt, setAdCanSkipAt] = useState(5);
   const [videoError, setVideoError] = useState<string | null>(null);
-  const hitMarkers = useRef<Set<string>>(new Set());
+
+  // Keep latest adSession in a ref so the timeupdate listener can check it
+  // without being torn down and re-subscribed on every session change.
+  const adSessionRef = useRef<AdSession | null>(null);
+  useEffect(() => { adSessionRef.current = adSession; }, [adSession]);
+
+  const resolveAdForMarker = useCallback(
+    (m: AdMarker): Ad | null => {
+      let id = m.assetUrl;
+      if (!id && m.assetUrls && m.assetUrls.length) {
+        id = m.assetUrls[Math.floor(Math.random() * m.assetUrls.length)];
+      }
+      if (!id) return null;
+      const ad = adsById[id];
+      return ad && ad.videoUrl ? ad : null;
+    },
+    [adsById],
+  );
 
   useImperativeHandle(ref, () => ({
     getCurrentTime: () => videoRef.current?.currentTime ?? 0,
-    seek: (t) => { if (videoRef.current) videoRef.current.currentTime = t; },
-    play: () => videoRef.current?.play(),
+    seek: (t) => {
+      const v = videoRef.current;
+      if (!v) return;
+
+      // If we were mid-ad, cancel the session and inherit its playing state
+      // for the main video. The ad <video> is about to unmount, so the
+      // `playing` flag won't get any more events from it — we have to drive
+      // the new state explicitly here.
+      if (adSessionRef.current) {
+        const adV = adVideoRef.current;
+        const wasAdPlaying = adV ? !adV.paused : false;
+        setAdSession(null);
+        setAdElapsed(0);
+        onAdProgress?.(null);
+
+        v.currentTime = t;
+        hitMarkers.current = new Set(
+          adMarkers.filter((m) => m.startTime <= t + 0.005).map((m) => m.id),
+        );
+
+        if (wasAdPlaying) {
+          // onPlay listener will flip `playing` back to true once it fires.
+          v.play().catch(() => {});
+        } else {
+          setPlaying(false);
+          onPlayingChange?.(false);
+        }
+        return;
+      }
+
+      v.currentTime = t;
+      hitMarkers.current = new Set(
+        adMarkers.filter((m) => m.startTime <= t + 0.005).map((m) => m.id),
+      );
+    },
+    seekIntoAd: (markerId, elapsed) => {
+      const m = adMarkers.find((x) => x.id === markerId);
+      if (!m) return;
+      const ad = resolveAdForMarker(m);
+      const v = videoRef.current;
+      if (!v) return;
+
+      if (!ad) {
+        // Marker has no playable asset — fall back to skipping past it.
+        v.currentTime = m.startTime + 0.01;
+        hitMarkers.current.add(m.id);
+        return;
+      }
+
+      const clampedElapsed = Math.max(0, Math.min(ad.duration, elapsed));
+
+      // Park the main video at the ad boundary and mark this ad as "hit" so
+      // it doesn't auto-fire again when playback resumes after the ad ends.
+      v.pause();
+      v.currentTime = m.startTime;
+      hitMarkers.current.add(m.id);
+      wasPlayingBeforeAd.current = true;
+
+      // If we're already in a session for this exact marker, just seek inside
+      // the ad video — no need to tear the session down and rebuild it.
+      if (adSessionRef.current?.marker.id === m.id && adVideoRef.current) {
+        adVideoRef.current.currentTime = clampedElapsed;
+        setAdElapsed(clampedElapsed);
+        onAdProgress?.({ markerId: m.id, elapsed: clampedElapsed });
+        return;
+      }
+
+      pendingAdStart.current = { elapsed: clampedElapsed, autoPlay: false };
+      setAdElapsed(clampedElapsed);
+      setAdCanSkipAt(Math.min(5, Math.floor(ad.duration / 3)) || 0);
+      setAdSession({ ad, marker: m });
+      onAdProgress?.({ markerId: m.id, elapsed: clampedElapsed });
+    },
+    play: () => { videoRef.current?.play().catch(() => {}); },
     pause: () => videoRef.current?.pause(),
   }));
 
+  // Main-video event wiring + ad trigger detection.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
 
     const onTime = () => {
+      // Don't drive UI off the main video while an ad is playing —
+      // it's paused but we still want the displayed time to freeze at the
+      // ad-boundary and not flicker.
+      if (adSessionRef.current) return;
       setCurrentTime(v.currentTime);
       onTimeUpdate?.(v.currentTime);
+
       for (const m of adMarkers) {
-        if (!hitMarkers.current.has(m.id) && Math.abs(v.currentTime - m.startTime) < 0.5) {
+        if (hitMarkers.current.has(m.id)) continue;
+        // Forward-only window — catches the boundary crossing without
+        // mis-firing when the user seeks back to before the marker.
+        if (v.currentTime >= m.startTime && v.currentTime - m.startTime < 1.5) {
           hitMarkers.current.add(m.id);
-          if (m.type !== 'auto') {
-            v.pause();
-            setAdPlaying(true);
-            setTimeout(() => { setAdPlaying(false); v.play(); }, 3000);
-          }
+          const ad = resolveAdForMarker(m);
+          if (!ad) continue; // no asset assigned → treat marker as no-op
+          wasPlayingBeforeAd.current = !v.paused;
+          v.pause();
+          setAdElapsed(0);
+          setAdCanSkipAt(Math.min(5, Math.floor(ad.duration / 3)) || 0);
+          setAdSession({ ad, marker: m });
+          break;
         }
       }
     };
@@ -68,8 +190,16 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       setVideoError(null);
       onDurationChange?.(v.duration || 0);
     };
-    const onPlay = () => { setPlaying(true); onPlayingChange?.(true); };
-    const onPause = () => { setPlaying(false); onPlayingChange?.(false); };
+    const onPlay = () => {
+      if (adSessionRef.current) return; // play state during ad is driven by ad video
+      setPlaying(true);
+      onPlayingChange?.(true);
+    };
+    const onPause = () => {
+      if (adSessionRef.current) return;
+      setPlaying(false);
+      onPlayingChange?.(false);
+    };
     const onError = () => setVideoError('Video unavailable. The URL may have expired.');
 
     v.addEventListener('timeupdate', onTime);
@@ -84,18 +214,101 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       v.removeEventListener('pause', onPause);
       v.removeEventListener('error', onError);
     };
-  }, [adMarkers, onTimeUpdate, onDurationChange, onPlayingChange]);
+  }, [adMarkers, resolveAdForMarker, onTimeUpdate, onDurationChange, onPlayingChange]);
 
+  // Reset hit list whenever the markers array identity changes (fresh session
+  // after edit) and the video src changes (new podcast).
   useEffect(() => { hitMarkers.current = new Set(); }, [adMarkers]);
-  useEffect(() => { setVideoError(null); }, [src]);
+  useEffect(() => { setVideoError(null); hitMarkers.current = new Set(); }, [src]);
 
-  const togglePlay = useCallback(() => {
+  // Propagate error state to any parent that needs to react (e.g. Timeline
+  // should stop its loading spinner and show an error message).
+  useEffect(() => { onError?.(videoError); }, [videoError, onError]);
+
+  // Safety net: if metadata hasn't loaded after a reasonable window, assume
+  // the URL is dead and surface an error. Otherwise the Timeline would spin
+  // forever when signed S3 URLs expire.
+  useEffect(() => {
+    if (!src) return;
+    if (duration > 0) return;
+    if (videoError) return;
+    const timer = window.setTimeout(() => {
+      if (!videoRef.current) return;
+      if (videoRef.current.duration > 0) return;
+      setVideoError('Video unavailable. The URL may have expired.');
+    }, 12_000);
+    return () => window.clearTimeout(timer);
+  }, [src, duration, videoError]);
+
+  // When an ad session starts, kick off ad playback + wire its lifecycle.
+  useEffect(() => {
+    if (!adSession) return;
+    const adV = adVideoRef.current;
+    if (!adV) return;
+
+    const start = pendingAdStart.current ?? { elapsed: 0, autoPlay: true };
+    pendingAdStart.current = null;
+
+    adV.currentTime = start.elapsed;
+    adV.volume = muted ? 0 : volume;
+    adV.muted = muted;
+    if (start.autoPlay) {
+      adV.play().catch(() => {
+        // Autoplay blocked — stay paused; user can press the play button.
+      });
+    }
+
+    const onTime = () => {
+      setAdElapsed(adV.currentTime);
+      onAdProgress?.({ markerId: adSession.marker.id, elapsed: adV.currentTime });
+    };
+    const onEnded = () => endAdSession(true);
+    const onError = () => endAdSession(false);
+    const onPlay = () => { setPlaying(true); onPlayingChange?.(true); };
+    const onPause = () => { setPlaying(false); onPlayingChange?.(false); };
+
+    adV.addEventListener('timeupdate', onTime);
+    adV.addEventListener('ended', onEnded);
+    adV.addEventListener('error', onError);
+    adV.addEventListener('play', onPlay);
+    adV.addEventListener('pause', onPause);
+    return () => {
+      adV.removeEventListener('timeupdate', onTime);
+      adV.removeEventListener('ended', onEnded);
+      adV.removeEventListener('error', onError);
+      adV.removeEventListener('play', onPlay);
+      adV.removeEventListener('pause', onPause);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adSession]);
+
+  function endAdSession(autoResume: boolean) {
+    setAdSession(null);
+    setAdElapsed(0);
+    onAdProgress?.(null);
     const v = videoRef.current;
     if (!v) return;
-    if (v.paused) v.play(); else v.pause();
+    if (autoResume && wasPlayingBeforeAd.current) {
+      v.play().catch(() => {});
+    }
+  }
+
+  const togglePlay = useCallback(() => {
+    if (adSessionRef.current) {
+      const adV = adVideoRef.current;
+      if (!adV) return;
+      if (adV.paused) adV.play().catch(() => {});
+      else adV.pause();
+      return;
+    }
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => {});
+    else v.pause();
   }, []);
 
   function seekBy(delta: number) {
+    if (adSession) return; // ignore main-video seeks while ad is playing
     const v = videoRef.current;
     if (!v) return;
     v.currentTime = clamp(v.currentTime + delta, 0, v.duration);
@@ -106,10 +319,13 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     const v = videoRef.current;
     if (!rect || !v || !v.duration) return;
     v.currentTime = clamp((clientX - rect.left) / rect.width, 0, 1) * v.duration;
-    hitMarkers.current = new Set(adMarkers.filter((m) => m.startTime < v.currentTime - 1).map((m) => m.id));
+    hitMarkers.current = new Set(
+      adMarkers.filter((m) => m.startTime <= v.currentTime + 0.005).map((m) => m.id),
+    );
   }
 
   function handleProgressMouseDown(e: React.MouseEvent<HTMLDivElement>) {
+    if (adSession) return;
     e.preventDefault();
     dragging.current = true;
     seekToClientX(e.clientX);
@@ -124,16 +340,21 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     const next = speeds[(speeds.indexOf(speed) + 1) % speeds.length];
     setSpeed(next);
     if (videoRef.current) videoRef.current.playbackRate = next;
+    if (adVideoRef.current) adVideoRef.current.playbackRate = next;
   }
 
   function toggleMute() {
-    const v = videoRef.current;
-    if (!v) return;
-    v.muted = !v.muted;
-    setMuted(v.muted);
+    const nextMuted = !muted;
+    setMuted(nextMuted);
+    if (videoRef.current) videoRef.current.muted = nextMuted;
+    if (adVideoRef.current) adVideoRef.current.muted = nextMuted;
   }
 
   const progress = duration ? currentTime / duration : 0;
+  const adDurationTotal = adSession?.ad.duration ?? 0;
+  const adProgressPct = adDurationTotal ? Math.min(1, adElapsed / adDurationTotal) : 0;
+  const adRemaining = Math.max(0, Math.ceil(adDurationTotal - adElapsed));
+  const canSkip = adElapsed >= adCanSkipAt;
 
   return (
     <div className="flex flex-col bg-white rounded-xl border border-gray-100 overflow-hidden h-full">
@@ -143,6 +364,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           <video
             ref={videoRef}
             src={src}
+            playsInline
             className={`w-full h-full object-contain ${videoError ? 'opacity-0' : ''}`}
           />
         )}
@@ -161,23 +383,62 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
             <p className="text-red-400 text-xs font-medium leading-snug">{videoError}</p>
           </div>
         )}
-        {adPlaying && (
-          <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center animate-fade-in z-10">
-            <div className="bg-white/10 border border-white/20 rounded-xl px-6 py-4 text-center">
-              <div className="text-[10px] text-gray-400 uppercase tracking-widest mb-1">Advertisement</div>
-              <div className="text-white text-sm font-medium">Playing ad...</div>
-              <div className="mt-2.5 h-0.5 w-32 bg-white/20 rounded-full overflow-hidden">
-                <div className="h-full bg-white rounded-full" style={{ animation: 'slideProgress 3s linear forwards' }} />
+
+        {/* Ad overlay — real <video> playing the ad's videoUrl */}
+        {adSession && (
+          <div className="absolute inset-0 bg-black z-10 animate-fade-in">
+            <video
+              ref={adVideoRef}
+              src={adSession.ad.videoUrl}
+              playsInline
+              autoPlay
+              className="w-full h-full object-contain"
+              onClick={togglePlay}
+            />
+            {/* Top-left label */}
+            <div className="absolute top-3 left-3 flex items-center gap-2 pointer-events-none">
+              <div className="bg-white/10 border border-white/20 backdrop-blur-sm rounded-md px-2.5 py-1 text-[10px] text-white uppercase tracking-widest font-semibold">
+                Advertisement
               </div>
+              <div className="text-white/70 text-xs font-medium truncate max-w-[200px]">
+                {adSession.ad.title}
+              </div>
+            </div>
+            {/* Top-right skip */}
+            <div className="absolute top-3 right-3">
+              {canSkip ? (
+                <button
+                  onClick={() => endAdSession(true)}
+                  className="flex items-center gap-1.5 bg-white/10 hover:bg-white/20 border border-white/25 backdrop-blur-sm text-white text-xs font-medium rounded-md px-3 py-1.5 transition active:scale-95"
+                >
+                  Skip ad
+                  <SkipForward size={12} />
+                </button>
+              ) : (
+                <div className="bg-white/10 border border-white/20 backdrop-blur-sm text-white/80 text-[11px] font-medium rounded-md px-3 py-1.5 select-none">
+                  Skip in {Math.max(0, Math.ceil(adCanSkipAt - adElapsed))}s
+                </div>
+              )}
+            </div>
+            {/* Bottom progress */}
+            <div className="absolute left-0 right-0 bottom-0 h-1 bg-white/15">
+              <div
+                className="h-full bg-yellow-400 transition-[width] duration-150 linear"
+                style={{ width: `${adProgressPct * 100}%` }}
+              />
+            </div>
+            {/* Bottom-left countdown */}
+            <div className="absolute bottom-2 left-3 text-white/80 text-[10px] font-mono tabular-nums pointer-events-none">
+              {adRemaining}s
             </div>
           </div>
         )}
       </div>
 
-      {/* Thin progress bar — draggable */}
+      {/* Thin progress bar — main video */}
       <div
         ref={progressRef}
-        className="h-1 bg-gray-200 cursor-pointer group relative select-none"
+        className={`h-1 bg-gray-200 group relative select-none ${adSession ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
         onMouseDown={handleProgressMouseDown}
       >
         <div className="h-full bg-gray-900 relative transition-none" style={{ width: `${progress * 100}%` }}>
@@ -192,15 +453,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         ))}
       </div>
 
-      {/* Controls — matching Figma exactly */}
+      {/* Controls */}
       <div className="px-3 py-3 flex items-center justify-between gap-1">
-        {/* Left: Jump to start + back 10s */}
         <div className="flex items-center gap-1">
           <button
-            onClick={() => { if (videoRef.current) videoRef.current.currentTime = 0; }}
-            className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-900 transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
+            onClick={() => { if (!adSession && videoRef.current) videoRef.current.currentTime = 0; }}
+            disabled={!!adSession}
+            className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
           >
-            {/* Jump to start icon */}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/>
             </svg>
@@ -208,9 +468,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           </button>
           <button
             onClick={() => seekBy(-10)}
-            className="flex items-center gap-0.5 text-[11px] text-gray-500 hover:text-gray-900 transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
+            disabled={!!adSession}
+            className="flex items-center gap-0.5 text-[11px] text-gray-500 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
           >
-            {/* Back 10s icon */}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.51"/>
             </svg>
@@ -218,11 +478,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           </button>
         </div>
 
-        {/* Center: rewind | play | ff */}
         <div className="flex items-center gap-2">
           <button
             onClick={() => seekBy(-5)}
-            className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition"
+            disabled={!!adSession}
+            className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
               <path d="M11 5L1 12l10 7V5zm11 0L12 12l10 7V5z"/>
@@ -230,7 +490,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           </button>
           <button
             onClick={togglePlay}
-            className="w-9 h-9 bg-gray-900 hover:bg-gray-700 text-white rounded-full flex items-center justify-center transition shadow-sm"
+            className="w-9 h-9 bg-gray-900 hover:bg-gray-700 text-white rounded-full flex items-center justify-center transition shadow-sm active:scale-95"
           >
             {playing ? (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -244,7 +504,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           </button>
           <button
             onClick={() => seekBy(5)}
-            className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition"
+            disabled={!!adSession}
+            className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
               <path d="M13 5l10 7-10 7V5zM2 5l10 7-10 7V5z"/>
@@ -252,11 +513,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           </button>
         </div>
 
-        {/* Right: fwd 10s + Jump to end */}
         <div className="flex items-center gap-1">
           <button
             onClick={() => seekBy(10)}
-            className="flex items-center gap-0.5 text-[11px] text-gray-500 hover:text-gray-900 transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
+            disabled={!!adSession}
+            className="flex items-center gap-0.5 text-[11px] text-gray-500 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
           >
             <span>10s</span>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -264,8 +525,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
             </svg>
           </button>
           <button
-            onClick={() => { const v = videoRef.current; if (v) v.currentTime = v.duration; }}
-            className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-900 transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
+            onClick={() => { if (!adSession) { const v = videoRef.current; if (v) v.currentTime = v.duration; } }}
+            disabled={!!adSession}
+            className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
           >
             <span className="hidden sm:inline">Jump to end</span>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -291,6 +553,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
             const val = Number(e.target.value);
             setVolume(val);
             if (videoRef.current) { videoRef.current.volume = val; videoRef.current.muted = val === 0; }
+            if (adVideoRef.current) { adVideoRef.current.volume = val; adVideoRef.current.muted = val === 0; }
             setMuted(val === 0);
           }}
           className="w-16 h-1 accent-gray-900"
@@ -299,7 +562,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         <button onClick={cycleSpeed} className="text-[10px] text-gray-400 hover:text-gray-700 font-mono border border-gray-200 rounded px-1.5 py-0.5 hover:bg-gray-50 transition">
           {speed}x
         </button>
-        <span className="text-[10px] text-gray-400 font-mono">{formatTime(currentTime)}</span>
+        <span className="text-[10px] text-gray-400 font-mono">
+          {adSession ? `Ad · ${adRemaining}s` : formatTime(currentTime)}
+        </span>
       </div>
     </div>
   );

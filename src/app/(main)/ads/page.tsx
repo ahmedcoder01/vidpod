@@ -7,22 +7,16 @@ import { AdMarker, AdType, Ad, Podcast } from '@/lib/types';
 import { formatTime, generateId } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import { useHistory } from '@/hooks/use-history';
+import { useAds } from '@/hooks/use-ads';
 import { VideoPlayer, VideoPlayerHandle } from '@/components/video/video-player';
 import { Timeline } from '@/components/video/timeline';
 import { CreateMarkerModal } from '@/components/ads/create-marker-modal';
 import { SelectAdsModal } from '@/components/ads/select-ads-modal';
 import {
-  Undo2, Redo2, ZoomIn, ZoomOut, Plus, Edit2, Trash2,
+  Plus, Trash2,
   HelpCircle, Info, ArrowLeft, Play, Radio,
   Settings, Bell, ChevronDown,
 } from 'lucide-react';
-
-function formatTimeHMS(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
 
 const TYPE_LABELS = { auto: 'Auto', static: 'Static', ab: 'A/B' };
 const TYPE_BADGE: Record<string, string> = {
@@ -100,13 +94,15 @@ function TopbarUser() {
 // ── Full ad editor ─────────────────────────────────────────────────────────
 function AdEditor({ podcast, onBack }: { podcast: Podcast; onBack: () => void }) {
   const { markers, push, undo, redo, canUndo, canRedo } = useHistory(podcast.adMarkers);
-  const [zoom, setZoom] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(podcast.duration ?? 0);
+  const [adProgress, setAdProgress] = useState<{ markerId: string; elapsed: number } | null>(null);
+  const [videoError, setVideoError] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [pendingType, setPendingType] = useState<AdType | null>(null);
   const [editingMarker, setEditingMarker] = useState<AdMarker | null>(null);
   const playerRef = useRef<VideoPlayerHandle>(null);
+  const { ads } = useAds();
 
   // Spacebar + Ctrl+Z/Y
   useEffect(() => {
@@ -150,28 +146,39 @@ function AdEditor({ podcast, onBack }: { podcast: Podcast; onBack: () => void })
     push(markers.map((m) => m.id === id ? { ...m, startTime: t } : m).sort((a, b) => a.startTime - b.startTime));
   }
 
+  function handleSeek(t: number) { playerRef.current?.seek(t); }
+  function handleSeekIntoAd(markerId: string, elapsed: number) {
+    playerRef.current?.seekIntoAd(markerId, elapsed);
+  }
+
   const sorted = [...markers].sort((a, b) => a.startTime - b.startTime);
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[#f5f5f7]">
       {/* Top header */}
-      <div className="shrink-0 bg-[#f5f5f7]/95 backdrop-blur border-b border-black/5 px-5 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-900 transition px-2 py-1.5 rounded-lg hover:bg-gray-200 shrink-0"
-          >
-            <ArrowLeft size={13} />
-            Ads
-          </button>
-          <div className="min-w-0">
-            <h1 className="text-gray-900 text-sm font-semibold leading-tight truncate max-w-xl">{podcast.title}</h1>
-            <p className="text-gray-400 text-xs mt-0.5">
-              {podcast.episode && <span>Episode {podcast.episode} · </span>}{podcast.date}
+      <div className="shrink-0 bg-[#f5f5f7]/95 backdrop-blur border-b border-black/5 px-6 pt-4 pb-5">
+        <div className="flex items-start justify-between gap-6">
+          <div className="min-w-0 flex-1">
+            <button
+              onClick={onBack}
+              className="group inline-flex items-center gap-1 text-[12px] text-gray-500 hover:text-gray-900 transition mb-2 -ml-1 px-1 py-0.5 rounded"
+            >
+              <ArrowLeft size={13} className="transition group-hover:-translate-x-0.5" />
+              <span>Ads</span>
+            </button>
+            <h1 className="text-gray-900 font-bold leading-[1.22] tracking-tight text-[22px] sm:text-[24px] max-w-4xl">
+              {podcast.title}
+            </h1>
+            <p className="text-gray-500 text-[12px] mt-2 tracking-wide">
+              {podcast.episode && <span>Episode {podcast.episode}</span>}
+              {podcast.episode && podcast.date && <span className="mx-1.5">•</span>}
+              {podcast.date}
             </p>
           </div>
+          <div className="pt-1 shrink-0">
+            <TopbarUser />
+          </div>
         </div>
-        <TopbarUser />
       </div>
 
       {/* Main 2-col area */}
@@ -255,67 +262,34 @@ function AdEditor({ podcast, onBack }: { podcast: Podcast; onBack: () => void })
             ref={playerRef}
             src={podcast.videoUrl ?? ''}
             adMarkers={markers}
-            onTimeUpdate={(t) => setCurrentTime(t)}
-            onDurationChange={(d) => setDuration(d)}
+            ads={ads}
+            onTimeUpdate={setCurrentTime}
+            onDurationChange={setDuration}
+            onAdProgress={setAdProgress}
+            onError={setVideoError}
           />
         </div>
       </div>
 
       {/* BOTTOM: Timeline */}
-      <div className="shrink-0 border-t border-gray-200" style={{ height: 168 }}>
-        {/* Toolbar — light theme matching Figma */}
-        <div className="flex items-center gap-1 px-4 py-2 border-b border-gray-100 bg-white">
-          <button
-            onClick={undo} disabled={!canUndo}
-            className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-900 disabled:opacity-30 transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
-          >
-            <Undo2 size={12} />Undo
-          </button>
-          <button
-            onClick={redo} disabled={!canRedo}
-            className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-900 disabled:opacity-30 transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
-          >
-            <Redo2 size={12} />Redo
-          </button>
-
-          <div className="flex-1" />
-
-          <span className="font-mono text-xs tabular-nums text-gray-700 border border-gray-200 rounded-lg px-3 py-1 bg-white shadow-sm">
-            {formatTimeHMS(currentTime)}
-          </span>
-
-          <div className="flex-1" />
-
-          {/* Zoom */}
-          <div className="flex items-center gap-1">
-            <button onClick={() => setZoom((z) => Math.max(1, +(z - 0.5).toFixed(1)))}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition">
-              <ZoomOut size={14} />
-            </button>
-            <input
-              type="range" min="1" max="8" step="0.5" value={zoom}
-              onChange={(e) => setZoom(Number(e.target.value))}
-              className="w-24 h-1.5 accent-gray-900"
-            />
-            <button onClick={() => setZoom((z) => Math.min(8, +(z + 0.5).toFixed(1)))}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition">
-              <ZoomIn size={14} />
-            </button>
-          </div>
-        </div>
-
-        {/* Canvas */}
-        <div style={{ height: 116 }}>
-          <Timeline
-            duration={duration || 5400}
-            currentTime={currentTime}
-            markers={markers}
-            waveformData={podcast.waveformData ?? []}
-            zoom={zoom}
-            onSeek={(t) => playerRef.current?.seek(t)}
-            onMarkerMove={moveMarker}
-          />
-        </div>
+      <div className="shrink-0 px-3 pb-3">
+        <Timeline
+          duration={duration}
+          currentTime={currentTime}
+          markers={markers}
+          ads={ads}
+          adProgress={adProgress}
+          error={videoError}
+          waveformData={podcast.waveformData ?? []}
+          onSeek={handleSeek}
+          onSeekIntoAd={handleSeekIntoAd}
+          onMarkerDelete={deleteMarker}
+          onMarkerMove={moveMarker}
+          onUndo={undo}
+          onRedo={redo}
+          canUndo={canUndo}
+          canRedo={canRedo}
+        />
       </div>
 
       {/* Modals */}
@@ -325,15 +299,17 @@ function AdEditor({ podcast, onBack }: { podcast: Podcast; onBack: () => void })
       {pendingType && (
         <SelectAdsModal
           mode={pendingType === 'ab' ? 'ab' : 'static'}
-          onConfirm={(ads) => { addMarker(pendingType!, ads); setPendingType(null); }}
+          ads={ads}
+          onConfirm={(selected) => { addMarker(pendingType!, selected); setPendingType(null); }}
           onCancel={() => setPendingType(null)}
         />
       )}
       {editingMarker && (
         <SelectAdsModal
           mode={editingMarker.type === 'ab' ? 'ab' : 'static'}
-          onConfirm={(ads) => {
-            push(markers.map((m) => m.id === editingMarker.id ? { ...m, assetUrl: ads[0]?.id, assetUrls: ads.map((a) => a.id) } : m));
+          ads={ads}
+          onConfirm={(selected) => {
+            push(markers.map((m) => m.id === editingMarker.id ? { ...m, assetUrl: selected[0]?.id, assetUrls: selected.map((a) => a.id) } : m));
             setEditingMarker(null);
           }}
           onCancel={() => setEditingMarker(null)}

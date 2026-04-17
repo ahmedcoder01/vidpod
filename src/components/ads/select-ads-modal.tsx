@@ -1,23 +1,29 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Ad } from '@/lib/types';
-import { mockAds, adCampaigns } from '@/lib/mock-data';
 import { cn } from '@/lib/utils';
 import { X, Search, Upload, Eye, Check } from 'lucide-react';
 
 interface Props {
   mode: 'static' | 'ab';
+  ads: Ad[];
   onConfirm: (selected: Ad[]) => void;
   onCancel: () => void;
 }
 
-export function SelectAdsModal({ mode, onConfirm, onCancel }: Props) {
+export function SelectAdsModal({ mode, ads, onConfirm, onCancel }: Props) {
   const [search, setSearch] = useState('');
   const [campaign, setCampaign] = useState('All Videos');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const filtered = mockAds.filter((ad) => {
+  // Derive campaign filter chips from the ads we actually received.
+  const adCampaigns = useMemo(
+    () => ['All Videos', ...Array.from(new Set(ads.map((a) => a.campaign)))],
+    [ads],
+  );
+
+  const filtered = ads.filter((ad) => {
     const matchSearch = ad.title.toLowerCase().includes(search.toLowerCase()) ||
       ad.advertiser.toLowerCase().includes(search.toLowerCase());
     const matchCampaign = campaign === 'All Videos' || ad.campaign === campaign || ad.tags.includes(campaign);
@@ -37,13 +43,28 @@ export function SelectAdsModal({ mode, onConfirm, onCancel }: Props) {
   }
 
   function handleConfirm() {
-    const ads = mockAds.filter((a) => selected.has(a.id));
-    onConfirm(ads);
+    onConfirm(ads.filter((a) => selected.has(a.id)));
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg animate-slide-in flex flex-col max-h-[80vh]">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in"
+      style={{
+        background:
+          'radial-gradient(ellipse at center, rgba(15,15,20,0.55) 0%, rgba(8,8,12,0.72) 100%)',
+        backdropFilter: 'blur(1.5px) saturate(115%)',
+        WebkitBackdropFilter: 'blur(1.5px) saturate(115%)',
+      }}
+      onClick={onCancel}
+    >
+      <div
+        className="bg-white rounded-2xl w-full max-w-lg animate-slide-in flex flex-col max-h-[80vh]"
+        style={{
+          boxShadow:
+            '0 24px 64px -12px rgba(0,0,0,0.35), 0 8px 24px -6px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.04)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100">
           <div>
