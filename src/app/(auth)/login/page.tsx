@@ -1,11 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const params = useSearchParams();
+  const next = params.get('next') || '/dashboard';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -16,10 +18,22 @@ export default function LoginPage() {
     setError('');
     if (!email || !password) { setError('Please fill in all fields.'); return; }
     setLoading(true);
-    // Mock auth - just redirect to dashboard
-    await new Promise((r) => setTimeout(r, 600));
-    setLoading(false);
-    router.push('/dashboard');
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? 'Sign-in failed');
+        return;
+      }
+      router.push(next);
+      router.refresh();
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -81,5 +95,13 @@ export default function LoginPage() {
         </Link>
       </p>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }

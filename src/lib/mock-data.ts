@@ -1,4 +1,4 @@
-import { Ad, AdMarker, Podcast, User } from "./types";
+import { Ad, AdMarker, Podcast, PodcastShow, User } from "./types";
 
 export const mockUser: User = {
   id: "u1",
@@ -55,3 +55,29 @@ export const mockPodcasts: Podcast[] = [
 ];
 
 export const adCampaigns = ["All Videos", "n8n"];
+
+// Podcast shows (feeds/channels). Mocked for now — will be swapped for a
+// `/api/me/podcasts` response once the DB has a Podcast table.
+export const mockPodcastShows: PodcastShow[] = [
+  {
+    id: "show-diary",
+    title: "The Diary Of A CEO",
+    description: "Honest conversations with Steven Bartlett.",
+    initials: "DC",
+    coverGradient: "from-orange-400 to-red-500",
+  },
+  {
+    id: "show-founders",
+    title: "Founders Edge",
+    description: "Stories from operators who shipped.",
+    initials: "FE",
+    coverGradient: "from-indigo-400 to-purple-500",
+  },
+  {
+    id: "show-metrics",
+    title: "Metrics & Madness",
+    description: "Dashboards, experiments, and the people who run them.",
+    initials: "MM",
+    coverGradient: "from-emerald-400 to-teal-500",
+  },
+];

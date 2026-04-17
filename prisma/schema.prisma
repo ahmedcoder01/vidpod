@@ -1,0 +1,146 @@
+// Vidpod database schema
+// Phase 1 infra — SQLite via Prisma. See plan for design notes.
+
+datasource db {
+  provider = "sqlite"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ─── Users ────────────────────────────────────────────────
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String
+  passwordHash  String?  // populated in Phase 2 (JWT auth)
+  avatar        String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  podcasts      Podcast[]
+  videos        Video[]
+  uploadedAds   Ad[]
+}
+
+// ─── Podcasts (the show; contains many videos/episodes) ───
+model Podcast {
+  id            String   @id @default(cuid())
+  title         String
+  description   String   @default("")
+  coverArt      String?  // URL to cover image (fallback: initials + gradient)
+  // Short initials shown in the sidebar badge (e.g. "DC"). If null, derive
+  // from the title at the UI layer.
+  initials      String?
+  // Tailwind gradient classes or hex tuple for the sidebar badge background.
+  // Nullable so the UI can fall back to a hash-derived default.
+  coverGradient String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  ownerId       String?
+  owner         User?    @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
+  videos        Video[]
+
+  @@index([ownerId])
+}
+
+// ─── Videos (podcast episodes) ────────────────────────────
+model Video {
+  id            String   @id @default(cuid())
+  title         String
+  description   String   @default("")
+  author        String   // display name (e.g. "The Diary Of A CEO")
+  status        String   @default("pending") // pending | uploaded | chunking | completed
+
+  episode       String?
+  duration      Float    @default(0)   // seconds
+  thumbnail     String?
+
+  fullS3Url     String?
+  chunksURL     String?
+  waveformData  String   @default("[]") // JSON-encoded number[] (normalized 0-1)
+
+  publishedAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Every video lives under exactly one podcast. Cascade so deleting a
+  // podcast cleans up its episodes.
+  podcastId     String
+  podcast       Podcast  @relation(fields: [podcastId], references: [id], onDelete: Cascade)
+
+  ownerId       String?
+  owner         User?    @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
+  renditions    Rendition[]
+  adMarkers     AdMarker[]
+
+  @@index([podcastId])
+  @@index([ownerId])
+  @@index([status])
+}
+
+// ─── Renditions (HLS outputs per video) ───────────────────
+model Rendition {
+  id           String  @id @default(cuid())
+  resolution   String  // "240p" | "480p" | "720p" | "1080p"
+  playlistUrl  String
+  bitrateKbps  Int
+  width        Int
+  height       Int
+
+  videoId      String
+  video        Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+}
+
+// ─── Ad library (shared across videos) ────────────────────
+model Ad {
+  id           String   @id @default(cuid())
+  title        String
+  advertiser   String   @default("")
+  campaign     String   @default("")
+  duration     Float    @default(0)    // seconds
+  thumbnail    String?
+  videoUrl     String?
+  tags         String   @default("[]") // JSON-encoded string[]
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  uploaderId   String?
+  uploader     User?    @relation(fields: [uploaderId], references: [id], onDelete: SetNull)
+
+  @@index([uploaderId])
+}
+
+// ─── Ad markers (where ads splice into a video) ───────────
+model AdMarker {
+  id           String   @id @default(cuid())
+  type         String   // "static" | "auto" | "ab"
+  startTime    Float    // seconds in video time
+  label        String?
+
+  // Mirrors the existing frontend contract.
+  // assetUrl  = primary single ad id (static/auto)
+  // assetUrls = JSON-encoded string[] of all involved ad ids (A/B)
+  // Plain strings — not FKs — so we can evolve without FK churn;
+  // promote to a junction table in Phase 2 if integrity needed.
+  assetUrl     String?
+  assetUrls    String   @default("[]")
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  videoId      String
+  video        Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+  @@index([videoId, startTime])
+}

@@ -54,3 +54,16 @@ export interface User {
   email: string;
   avatar?: string;
 }
+
+// ── Podcast show (a feed/channel) that contains many episodes (Video/Podcast).
+// Distinct from the legacy `Podcast` interface above which represents an
+// episode in the current mocked UI. Will map to the `Podcast` Prisma model
+// when the DB migration lands.
+export interface PodcastShow {
+  id: string;
+  title: string;
+  description?: string;
+  coverArt?: string;
+  initials?: string;
+  coverGradient?: string; // tailwind "from-X to-Y" fragment
+}

@@ -18,9 +18,22 @@ export default function SignupPage() {
     if (!name || !email || !password) { setError('Please fill in all fields.'); return; }
     if (password.length < 8) { setError('Password must be at least 8 characters.'); return; }
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 600));
-    setLoading(false);
-    router.push('/dashboard');
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? 'Sign-up failed');
+        return;
+      }
+      router.push('/dashboard');
+      router.refresh();
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (

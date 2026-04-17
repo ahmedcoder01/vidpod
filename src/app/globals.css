@@ -115,6 +115,49 @@ body {
 }
 .delete-pop { animation: deletePop 0.22s cubic-bezier(0.34, 1.56, 0.64, 1); }
 
+/* Upload modal step transitions. Direction-aware so steps can slide in from
+   the right when advancing and from the left when going back. */
+@keyframes stepInRight {
+  0%   { opacity: 0; transform: translateX(16px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+@keyframes stepInLeft {
+  0%   { opacity: 0; transform: translateX(-16px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+.step-in-right { animation: stepInRight 0.28s cubic-bezier(0.25, 0.8, 0.3, 1); }
+.step-in-left  { animation: stepInLeft  0.28s cubic-bezier(0.25, 0.8, 0.3, 1); }
+
+/* Checkmark stroke draw for the success step. The SVG path sets
+   stroke-dasharray on the element itself. */
+@keyframes checkmarkDraw {
+  0%   { stroke-dashoffset: var(--len, 48); }
+  100% { stroke-dashoffset: 0; }
+}
+.checkmark-draw { animation: checkmarkDraw 0.45s cubic-bezier(0.65, 0, 0.3, 1) forwards; }
+
+/* Subtle diagonal shimmer that slides across the progress ring while the
+   upload is active, so there's always motion even at slow speeds. */
+@keyframes progressShimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.progress-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 35%, rgba(255,255,255,0.45) 50%, transparent 65%);
+  animation: progressShimmer 1.6s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes partFill {
+  0%   { opacity: 0; transform: scale(0.6); }
+  60%  { opacity: 1; transform: scale(1.1); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.part-fill { animation: partFill 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+
 /* Timeline dragging */
 .timeline-marker {
   cursor: grab;

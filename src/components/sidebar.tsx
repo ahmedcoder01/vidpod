@@ -2,10 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { useApp } from '@/context/app-context';
+import { PodcastShow } from '@/lib/types';
+import { CreatePodcastModal } from '@/components/podcast/create-podcast-modal';
 import {
   LayoutDashboard, BarChart2, Radio, Layers, Download, Settings,
-  ChevronDown, Users, MessageSquare, HelpCircle, ToggleLeft,
+  ChevronDown, Users, MessageSquare, HelpCircle, ToggleLeft, Check, Plus, Loader2,
 } from 'lucide-react';
 
 const mainNav = [
@@ -16,6 +20,173 @@ const mainNav = [
   { label: 'Import', href: '/import', icon: Download },
   { label: 'Settings', href: '/settings', icon: Settings },
 ];
+
+// Fallback gradient pool — used when a podcast doesn't ship its own, so the
+// sidebar badge still renders consistently.
+const FALLBACK_GRADIENTS = [
+  'from-orange-400 to-red-500',
+  'from-indigo-400 to-purple-500',
+  'from-emerald-400 to-teal-500',
+  'from-pink-400 to-rose-500',
+  'from-sky-400 to-blue-500',
+  'from-amber-400 to-orange-500',
+];
+
+function hashIndex(str: string, mod: number) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+  return Math.abs(h) % mod;
+}
+
+function initialsFor(p: PodcastShow) {
+  if (p.initials) return p.initials;
+  const words = p.title.trim().split(/\s+/);
+  return (words[0]?.[0] ?? '?') + (words[1]?.[0] ?? '');
+}
+
+function gradientFor(p: PodcastShow) {
+  return p.coverGradient ?? FALLBACK_GRADIENTS[hashIndex(p.id, FALLBACK_GRADIENTS.length)];
+}
+
+function PodcastBadge({ show, size = 20 }: { show: PodcastShow; size?: number }) {
+  return (
+    <div
+      className={cn(
+        'rounded-md bg-linear-to-br shrink-0 flex items-center justify-center',
+        gradientFor(show),
+      )}
+      style={{ width: size, height: size }}
+    >
+      <span className="text-white font-bold" style={{ fontSize: Math.max(8, size * 0.4) }}>
+        {initialsFor(show).toUpperCase()}
+      </span>
+    </div>
+  );
+}
+
+function PodcastDropdown() {
+  const { podcasts, currentPodcast, setCurrentPodcastId, loading } = useApp();
+  const [open, setOpen] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Close on click-outside + Escape.
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="px-3 pb-3 relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 hover:bg-gray-50 transition rounded-lg px-2 py-1.5 text-left group"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        {currentPodcast ? (
+          <>
+            <PodcastBadge show={currentPodcast} />
+            <span className="text-gray-700 text-[11px] font-medium truncate flex-1">
+              {currentPodcast.title}
+            </span>
+          </>
+        ) : loading ? (
+          <>
+            <div className="w-5 h-5 rounded-md bg-gray-100 shrink-0 flex items-center justify-center">
+              <Loader2 size={10} className="text-gray-400 animate-spin" />
+            </div>
+            <span className="text-gray-400 text-[11px] font-medium truncate flex-1">
+              Loading…
+            </span>
+          </>
+        ) : (
+          <>
+            <div className="w-5 h-5 rounded-md bg-gray-200 shrink-0" />
+            <span className="text-gray-400 text-[11px] font-medium truncate flex-1">
+              No podcasts yet
+            </span>
+          </>
+        )}
+        <ChevronDown
+          size={11}
+          className={cn(
+            'text-gray-400 shrink-0 transition-transform',
+            open && 'rotate-180',
+          )}
+        />
+      </button>
+
+      {open && (
+        <div
+          className="absolute left-3 right-3 top-[calc(100%-2px)] z-40 bg-white border border-gray-200 rounded-xl overflow-hidden animate-fade-in"
+          style={{ boxShadow: '0 12px 32px -8px rgba(0,0,0,0.18), 0 4px 12px -4px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.02)' }}
+          role="listbox"
+        >
+          <div className="max-h-72 overflow-y-auto py-1">
+            {podcasts.length === 0 ? (
+              <div className="px-3 py-4 text-[11px] text-gray-400 text-center">
+                No podcasts yet
+              </div>
+            ) : (
+              podcasts.map((p) => {
+                const active = p.id === currentPodcast?.id;
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => { setCurrentPodcastId(p.id); setOpen(false); }}
+                    className={cn(
+                      'w-full flex items-center gap-2.5 px-2.5 py-2 text-left transition',
+                      active ? 'bg-indigo-50/60' : 'hover:bg-gray-50',
+                    )}
+                    role="option"
+                    aria-selected={active}
+                  >
+                    <PodcastBadge show={p} size={22} />
+                    <div className="flex-1 min-w-0">
+                      <p className={cn(
+                        'text-[11px] truncate',
+                        active ? 'text-indigo-700 font-semibold' : 'text-gray-800 font-medium',
+                      )}>
+                        {p.title}
+                      </p>
+                      {p.description && (
+                        <p className="text-[10px] text-gray-400 truncate mt-0.5">
+                          {p.description}
+                        </p>
+                      )}
+                    </div>
+                    {active && <Check size={12} className="text-indigo-600 shrink-0" />}
+                  </button>
+                );
+              })
+            )}
+          </div>
+          <button
+            className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50 border-t border-gray-100 transition"
+            onClick={() => { setOpen(false); setShowCreate(true); }}
+          >
+            <Plus size={12} className="text-gray-400" />
+            Create new podcast
+          </button>
+        </div>
+      )}
+
+      {showCreate && <CreatePodcastModal onClose={() => setShowCreate(false)} />}
+    </div>
+  );
+}
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -41,15 +212,7 @@ export function Sidebar() {
       </div>
 
       {/* Podcast selector */}
-      <div className="px-3 pb-3">
-        <button className="w-full flex items-center gap-2 hover:bg-gray-50 transition rounded-lg px-2 py-1.5 text-left group">
-          <div className="w-5 h-5 rounded-md bg-linear-to-br from-orange-400 to-red-500 shrink-0 flex items-center justify-center">
-            <span className="text-white text-[8px] font-bold">DC</span>
-          </div>
-          <span className="text-gray-700 text-[11px] font-medium truncate flex-1">The Diary Of A CEO</span>
-          <ChevronDown size={11} className="text-gray-400 shrink-0" />
-        </button>
-      </div>
+      <PodcastDropdown />
 
       {/* Main nav */}
       <nav className="flex-1 px-2 space-y-0.5 overflow-y-auto">
