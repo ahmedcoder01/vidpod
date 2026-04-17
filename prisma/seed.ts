@@ -138,9 +138,10 @@ async function main() {
           type: m.type,
           startTime: m.startTime,
           label: m.label,
-          assetUrl: m.assetUrl,
-          assetUrls: JSON.stringify(m.assetUrls ?? []),
           videoId: p.id,
+          markerAds: {
+            create: (m.adIds ?? []).map((adId, idx) => ({ adId, position: idx })),
+          },
         },
       });
     }

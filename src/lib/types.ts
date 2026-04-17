@@ -4,8 +4,9 @@ export interface AdMarker {
   id: string;
   type: AdType;
   startTime: number; // seconds
-  assetUrl?: string;
-  assetUrls?: string[]; // for A/B
+  // Attached ads, in display order. 1 entry for static/auto; 2+ for A/B.
+  // Empty means "marker reserved, no ad picked yet".
+  adIds: string[];
   label?: string;
 }
 

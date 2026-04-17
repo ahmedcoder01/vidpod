@@ -5,6 +5,7 @@ import {
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
   UploadPartCommand,
+  GetObjectCommand,
   type CompletedPart,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -85,6 +86,47 @@ export function publicUrlFor(key: string): string {
   if (PUBLIC_URL_BASE) return `${PUBLIC_URL_BASE}/${key}`;
   // Virtual-hosted–style URL works for all regions Prisma cares about.
   return `https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}`;
+}
+
+/**
+ * Reverse of `publicUrlFor`. Pulls the object key out of a stored full URL.
+ * Returns `null` if the URL doesn't match the known prefix shapes so the
+ * caller can fall back safely instead of throwing.
+ *
+ * Accepts either:
+ *   https://<bucket>.s3.<region>.amazonaws.com/<key>
+ *   <PUBLIC_URL_BASE>/<key>   (if AWS_S3_PUBLIC_URL_BASE is set)
+ */
+export function keyFromFullS3Url(url: string): string | null {
+  if (!url) return null;
+  if (PUBLIC_URL_BASE && url.startsWith(PUBLIC_URL_BASE + '/')) {
+    return url.slice(PUBLIC_URL_BASE.length + 1);
+  }
+  const vhosted = `https://${BUCKET}.s3.${REGION}.amazonaws.com/`;
+  if (url.startsWith(vhosted)) {
+    // Drop any query string — we stored the bare URL but be defensive.
+    const rest = url.slice(vhosted.length);
+    const q = rest.indexOf('?');
+    return q >= 0 ? rest.slice(0, q) : rest;
+  }
+  return null;
+}
+
+/**
+ * Mint a presigned GET URL for an S3 object. Used for video playback against
+ * a private bucket — the `<video>` element can fetch the bytes directly with
+ * the returned URL, no proxying through Next.
+ *
+ * Default TTL of 1 hour is long enough for most viewing sessions; the page
+ * can refetch if the user stays parked on a single video past that.
+ */
+export async function getPlaybackUrl(key: string, ttlSeconds = 60 * 60): Promise<string> {
+  const c = client();
+  return getSignedUrl(
+    c,
+    new GetObjectCommand({ Bucket: BUCKET!, Key: key }),
+    { expiresIn: ttlSeconds },
+  );
 }
 
 export function partCountFor(sizeBytes: number): number {

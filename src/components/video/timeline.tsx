@@ -57,12 +57,11 @@ function clamp(v: number, lo: number, hi: number) {
 
 function makeAdDurationResolver(adInfo: Record<string, AdInfo>) {
   return (m: AdMarker): number => {
-    if (m.assetUrl && adInfo[m.assetUrl]) return adInfo[m.assetUrl].duration;
-    if (m.assetUrls && m.assetUrls.length) {
-      const durs = m.assetUrls.map((id) => adInfo[id]?.duration ?? DEFAULT_AD_DUR);
-      return Math.max(...durs);
-    }
-    return DEFAULT_AD_DUR;
+    const ids = m.adIds ?? [];
+    if (!ids.length) return DEFAULT_AD_DUR;
+    // A/B: use the longest ad so the block fits any rotation pick.
+    const durs = ids.map((id) => adInfo[id]?.duration ?? DEFAULT_AD_DUR);
+    return Math.max(...durs);
   };
 }
 
@@ -553,51 +552,122 @@ export function Timeline({
                 }}
                 onMouseDown={isLoading ? undefined : onStripMouseDown}
               >
-                {/* Waveform segments — each sits between ads, so ads truly split the clip */}
+                {/* Waveform segments — each sits between ads, so ads truly
+                    split the clip. Rendered as inline SVG: mirrored bars
+                    with a warm "played" gradient on the left of the playhead
+                    and a cool "upcoming" gradient on the right. Empty state
+                    (waveform not yet analyzed) shows a drifting shimmer band. */}
                 {segments.map((seg, i) => {
                   const segLeftPx = seg.displayStart * pxPerSec;
                   const segWidthPx = (seg.displayEnd - seg.displayStart) * pxPerSec;
-                  // Resample waveformData for this segment's video-time range.
-                  const totalBars = Math.max(
-                    8,
-                    Math.floor(segWidthPx / 5),
-                  );
                   const srcLen = waveformData.length;
+
+                  // Empty state — backend hasn't populated waveformData yet.
+                  // Soft shimmering pink band communicates "still processing"
+                  // without a blocking spinner. Per-segment so ad blocks
+                  // still visually split the strip even before analysis.
+                  if (srcLen === 0) {
+                    return (
+                      <div
+                        key={i}
+                        className="absolute top-0 bottom-0 waveform-shimmer"
+                        style={{
+                          left: segLeftPx,
+                          width: segWidthPx,
+                          background:
+                            'linear-gradient(180deg, #f0abfc 0%, #e879f9 50%, #f0abfc 100%)',
+                          pointerEvents: 'none',
+                        }}
+                      />
+                    );
+                  }
+
+                  // Resample waveformData onto the segment. One bar per ~4px
+                  // of segment width (min 8) — matches the original density
+                  // the backend engineer recommended we keep.
+                  const totalBars = Math.max(8, Math.floor(segWidthPx / 4));
                   const srcStart = (seg.videoStart / videoDur) * srcLen;
                   const srcEnd = (seg.videoEnd / videoDur) * srcLen;
+                  const midY = STRIP_H / 2;
+                  const halfMax = STRIP_H * 0.42; // leave a touch of padding top+bottom
+                  const barGap = 1;
+                  const barW = Math.max(
+                    1.5,
+                    (segWidthPx - barGap * (totalBars - 1)) / totalBars,
+                  );
+
+                  // Gradient IDs are scoped per-segment so multiple SVGs on
+                  // the page don't collide. `i` is segment index.
+                  const coolId = `wv-cool-${i}`;
+                  const warmId = `wv-warm-${i}`;
+
                   return (
-                    <div
+                    <svg
                       key={i}
-                      className="absolute top-0 bottom-0 flex items-center"
+                      className="absolute"
                       style={{
+                        top: 0,
                         left: segLeftPx,
                         width: segWidthPx,
+                        height: STRIP_H,
                         background: '#f0abfc',
                         pointerEvents: 'none',
-                        padding: '0 2px',
                       }}
+                      viewBox={`0 0 ${Math.max(1, segWidthPx)} ${STRIP_H}`}
+                      preserveAspectRatio="none"
                     >
-                      {srcLen > 0 &&
-                        Array.from({ length: totalBars }).map((_, k) => {
-                          const srcIdx = Math.floor(
-                            srcStart + ((k + 0.5) / totalBars) * (srcEnd - srcStart),
-                          );
-                          const amp = waveformData[clamp(srcIdx, 0, srcLen - 1)] ?? 0.3;
-                          const h = Math.max(3, amp * STRIP_H * 0.78);
-                          return (
-                            <div
-                              key={k}
-                              style={{
-                                flex: 1,
-                                height: h,
-                                marginRight: 1,
-                                borderRadius: 1,
-                                background: '#e879f9',
-                              }}
-                            />
-                          );
-                        })}
-                    </div>
+                      <defs>
+                        {/* Played — solid white bars against the pink field. */}
+                        <linearGradient id={warmId} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%"   stopColor="#ffffff" />
+                          <stop offset="100%" stopColor="#ffffff" />
+                        </linearGradient>
+                        {/* Upcoming — same white, slightly dimmer via opacity. */}
+                        <linearGradient id={coolId} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%"   stopColor="#ffffff" />
+                          <stop offset="100%" stopColor="#ffffff" />
+                        </linearGradient>
+                      </defs>
+
+                      {Array.from({ length: totalBars }).map((_, k) => {
+                        const srcIdx = Math.floor(
+                          srcStart + ((k + 0.5) / totalBars) * (srcEnd - srcStart),
+                        );
+                        const rawAmp = waveformData[clamp(srcIdx, 0, srcLen - 1)] ?? 0;
+                        // Floor so silent regions still have silhouette —
+                        // dead-flat bars look like a bug, not a quiet moment.
+                        const amp = Math.max(0.06, rawAmp);
+                        const halfH = amp * halfMax;
+                        const xCenter = ((k + 0.5) / totalBars) * segWidthPx;
+                        const x = xCenter - barW / 2;
+
+                        // Played vs upcoming — compared by display time, so
+                        // the colour front travels with the red playhead.
+                        const barT =
+                          seg.displayStart +
+                          ((k + 0.5) / totalBars) * (seg.displayEnd - seg.displayStart);
+                        const played = barT <= playheadDisplayTime;
+
+                        // Subtle stagger on mount only. 0.4ms per bar keeps
+                        // 300 bars under 150ms of total lag — feels snappy.
+                        const delay = `${(k * 0.4).toFixed(1)}ms`;
+
+                        return (
+                          <rect
+                            key={k}
+                            className="waveform-bar"
+                            x={x}
+                            y={midY - halfH}
+                            width={barW}
+                            height={halfH * 2}
+                            rx={Math.min(barW / 2, 1.2)}
+                            fill={played ? `url(#${warmId})` : `url(#${coolId})`}
+                            opacity={played ? 1 : 0.82}
+                            style={{ ['--d' as string]: delay } as React.CSSProperties}
+                          />
+                        );
+                      })}
+                    </svg>
                   );
                 })}
 
@@ -615,7 +685,8 @@ export function Timeline({
                   const isHov = hoveredId === a.m.id;
                   const isDrag = draggingId === a.m.id;
                   const isSel = selectedId === a.m.id;
-                  const thumb = a.m.assetUrl ? AD_INFO[a.m.assetUrl]?.thumb : undefined;
+                  const thumbId = a.m.adIds?.[0];
+                  const thumb = thumbId ? AD_INFO[thumbId]?.thumb : undefined;
                   const narrow = widthPx < 60;
                   const outline = isDrag
                     ? '2px solid rgba(255,255,255,0.85)'

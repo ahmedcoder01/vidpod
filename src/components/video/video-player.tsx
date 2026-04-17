@@ -65,11 +65,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
 
   const resolveAdForMarker = useCallback(
     (m: AdMarker): Ad | null => {
-      let id = m.assetUrl;
-      if (!id && m.assetUrls && m.assetUrls.length) {
-        id = m.assetUrls[Math.floor(Math.random() * m.assetUrls.length)];
-      }
-      if (!id) return null;
+      const ids = m.adIds ?? [];
+      if (ids.length === 0) return null;
+      // A/B picks randomly; static/auto always has exactly one entry so the
+      // random pick collapses to that single ad.
+      const id = ids.length === 1 ? ids[0] : ids[Math.floor(Math.random() * ids.length)];
       const ad = adsById[id];
       return ad && ad.videoUrl ? ad : null;
     },

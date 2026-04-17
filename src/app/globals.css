@@ -158,6 +158,43 @@ body {
 }
 .part-fill { animation: partFill 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
 
+/* ── Waveform ─────────────────────────────────────────────────────────
+   Mount-in ripple: each bar rises from flat to full height. Delay per
+   bar is set via a CSS custom property --d so the SVG can stagger the
+   whole strip with a single keyframe. */
+@keyframes waveformBarRise {
+  0%   { transform: scaleY(0.04); opacity: 0; }
+  60%  { opacity: 1; }
+  100% { transform: scaleY(1); opacity: 1; }
+}
+.waveform-bar {
+  transform-origin: 50% 50%;
+  animation: waveformBarRise 380ms cubic-bezier(0.25, 0.9, 0.3, 1) var(--d, 0ms) both;
+}
+
+/* Subtle drifting highlight for the empty-waveform placeholder —
+   communicates "processing" without the aggressiveness of a spinner. */
+@keyframes shimmerDrift {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.waveform-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.waveform-shimmer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 40%,
+    rgba(232,121,249,0.35) 50%,
+    transparent 60%
+  );
+  animation: shimmerDrift 2.4s linear infinite;
+}
+
 /* Timeline dragging */
 .timeline-marker {
   cursor: grab;

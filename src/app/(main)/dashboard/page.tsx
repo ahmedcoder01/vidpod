@@ -225,7 +225,7 @@ export default function DashboardPage() {
 
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                     <Link
-                      href={`/ads?podcast=${video.id}`}
+                      href={`/ads?video=${video.id}`}
                       className="text-xs text-indigo-600 hover:text-indigo-700 font-medium bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg transition"
                     >
                       Manage ads

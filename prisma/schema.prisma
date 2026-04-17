@@ -11,26 +11,26 @@ generator client {
 
 // ─── Users ────────────────────────────────────────────────
 model User {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  name          String
-  passwordHash  String?  // populated in Phase 2 (JWT auth)
-  avatar        String?
+  id           String  @id @default(cuid())
+  email        String  @unique
+  name         String
+  passwordHash String? // populated in Phase 2 (JWT auth)
+  avatar       String?
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  podcasts      Podcast[]
-  videos        Video[]
-  uploadedAds   Ad[]
+  podcasts    Podcast[]
+  videos      Video[]
+  uploadedAds Ad[]
 }
 
 // ─── Podcasts (the show; contains many videos/episodes) ───
 model Podcast {
-  id            String   @id @default(cuid())
+  id            String  @id @default(cuid())
   title         String
-  description   String   @default("")
-  coverArt      String?  // URL to cover image (fallback: initials + gradient)
+  description   String  @default("")
+  coverArt      String? // URL to cover image (fallback: initials + gradient)
   // Short initials shown in the sidebar badge (e.g. "DC"). If null, derive
   // from the title at the UI layer.
   initials      String?
@@ -38,47 +38,55 @@ model Podcast {
   // Nullable so the UI can fall back to a hash-derived default.
   coverGradient String?
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  ownerId       String?
-  owner         User?    @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  ownerId String?
+  owner   User?   @relation(fields: [ownerId], references: [id], onDelete: SetNull)
 
-  videos        Video[]
+  videos Video[]
 
   @@index([ownerId])
 }
 
 // ─── Videos (podcast episodes) ────────────────────────────
+enum VideoStatus {
+  pending
+  uploaded
+  chunking
+  completed
+}
+
 model Video {
-  id            String   @id @default(cuid())
-  title         String
-  description   String   @default("")
-  author        String   // display name (e.g. "The Diary Of A CEO")
-  status        String   @default("pending") // pending | uploaded | chunking | completed
+  id          String      @id @default(cuid())
+  title       String
+  description String      @default("")
+  author      String // display name (e.g. "The Diary Of A CEO")
+  status      VideoStatus @default(pending)
 
-  episode       String?
-  duration      Float    @default(0)   // seconds
-  thumbnail     String?
+  episode    String?
+  duration   Float   @default(0) // seconds
+  thumbnail  String?
+  transcript String?
 
-  fullS3Url     String?
-  chunksURL     String?
-  waveformData  String   @default("[]") // JSON-encoded number[] (normalized 0-1)
+  fullS3Url    String?
+  chunksURL    String?
+  waveformData String  @default("[]") // JSON-encoded number[] (normalized 0-1)
 
-  publishedAt   DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   // Every video lives under exactly one podcast. Cascade so deleting a
   // podcast cleans up its episodes.
-  podcastId     String
-  podcast       Podcast  @relation(fields: [podcastId], references: [id], onDelete: Cascade)
+  podcastId String
+  podcast   Podcast @relation(fields: [podcastId], references: [id], onDelete: Cascade)
 
-  ownerId       String?
-  owner         User?    @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  ownerId String?
+  owner   User?   @relation(fields: [ownerId], references: [id], onDelete: SetNull)
 
-  renditions    Rendition[]
-  adMarkers     AdMarker[]
+  renditions Rendition[]
+  adMarkers  AdMarker[]
 
   @@index([podcastId])
   @@index([ownerId])
@@ -87,60 +95,80 @@ model Video {
 
 // ─── Renditions (HLS outputs per video) ───────────────────
 model Rendition {
-  id           String  @id @default(cuid())
-  resolution   String  // "240p" | "480p" | "720p" | "1080p"
-  playlistUrl  String
-  bitrateKbps  Int
-  width        Int
-  height       Int
+  id          String @id @default(cuid())
+  resolution  String // "240p" | "480p" | "720p" | "1080p"
+  playlistUrl String
+  bitrateKbps Int
+  width       Int
+  height      Int
 
-  videoId      String
-  video        Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  videoId String
+  video   Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@index([videoId])
 }
 
 // ─── Ad library (shared across videos) ────────────────────
 model Ad {
-  id           String   @id @default(cuid())
-  title        String
-  advertiser   String   @default("")
-  campaign     String   @default("")
-  duration     Float    @default(0)    // seconds
-  thumbnail    String?
-  videoUrl     String?
-  tags         String   @default("[]") // JSON-encoded string[]
+  id         String  @id @default(cuid())
+  title      String
+  advertiser String  @default("")
+  campaign   String  @default("")
+  duration   Float   @default(0) // seconds
+  thumbnail  String?
+  videoUrl   String?
+  tags       String  @default("[]") // JSON-encoded string[]
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  uploaderId   String?
-  uploader     User?    @relation(fields: [uploaderId], references: [id], onDelete: SetNull)
+  isPublicAd Boolean @default(false)
+
+  uploaderId String?
+  uploader   User?        @relation(fields: [uploaderId], references: [id], onDelete: SetNull)
+  markerLinks AdMarkerAd[]
 
   @@index([uploaderId])
+  @@index([isPublicAd])
 }
 
 // ─── Ad markers (where ads splice into a video) ───────────
+// One marker can have many attached ads (A/B rotation). For static/auto
+// there's exactly one entry in markerAds; for "ab" there are 2+.
 model AdMarker {
-  id           String   @id @default(cuid())
-  type         String   // "static" | "auto" | "ab"
-  startTime    Float    // seconds in video time
-  label        String?
+  id        String  @id @default(cuid())
+  type      String // "static" | "auto" | "ab"
+  startTime Float // seconds in video time
+  label     String?
 
-  // Mirrors the existing frontend contract.
-  // assetUrl  = primary single ad id (static/auto)
-  // assetUrls = JSON-encoded string[] of all involved ad ids (A/B)
-  // Plain strings — not FKs — so we can evolve without FK churn;
-  // promote to a junction table in Phase 2 if integrity needed.
-  assetUrl     String?
-  assetUrls    String   @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  videoId String
+  video   Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
-  videoId      String
-  video        Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  markerAds AdMarkerAd[]
 
   @@index([videoId])
   @@index([videoId, startTime])
+}
+
+// ─── Marker ↔ Ad join (ordered, many-to-many) ─────────────
+// `position` preserves the order the user picked in the selector; A/B
+// rotation keys off this so behavior is deterministic across reloads.
+model AdMarkerAd {
+  id       String @id @default(cuid())
+  position Int    @default(0)
+
+  markerId String
+  marker   AdMarker @relation(fields: [markerId], references: [id], onDelete: Cascade)
+
+  adId String
+  ad   Ad     @relation(fields: [adId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([markerId, adId])
+  @@index([markerId])
+  @@index([adId])
 }
