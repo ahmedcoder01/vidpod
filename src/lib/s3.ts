@@ -109,6 +109,15 @@ export async function createMultipartUploadWithParts(args: {
   key: string;
   contentType: string;
   partCount: number;
+  /**
+   * Object metadata saved as `x-amz-meta-*` headers. Sent once on the
+   * multipart init — survives through to the final object, so the Go worker
+   * can pull them via `HeadObject` without re-parsing the key path.
+   *
+   * Keys must be lowercase ASCII. Values must be ASCII (URL-encode otherwise).
+   * Combined key+value size must stay under ~2 KiB per object (S3 limit).
+   */
+  metadata?: Record<string, string>;
 }): Promise<StartMultipartResult> {
   const c = client();
   const { UploadId } = await c.send(
@@ -116,6 +125,7 @@ export async function createMultipartUploadWithParts(args: {
       Bucket: BUCKET!,
       Key: args.key,
       ContentType: args.contentType,
+      Metadata: args.metadata,
     }),
   );
   if (!UploadId) throw new Error('S3 did not return an UploadId');

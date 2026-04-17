@@ -7,11 +7,11 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
-import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { mockAds, mockPodcastShows, mockPodcasts, mockUser } from '../src/lib/mock-data';
 
-const adapter = new PrismaBetterSqlite3({
-  url: process.env.DATABASE_URL ?? 'file:./prisma/dev.db',
+const adapter = new PrismaPg({
+  connectionString: process.env.DATABASE_URL ?? 'postgresql://vidpod:vidpod-dev-pw@localhost:5432/vidpod',
 });
 const prisma = new PrismaClient({ adapter });
 

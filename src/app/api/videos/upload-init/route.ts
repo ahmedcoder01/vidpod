@@ -80,6 +80,16 @@ export async function POST(req: Request) {
       key,
       contentType,
       partCount: partCountFor(size),
+      // Pre-set object metadata so the Go worker can correlate the S3 event
+      // back to our DB row without reparsing the key. Keys must be lowercase
+      // ASCII and values plain ASCII. S3 exposes these as `x-amz-meta-*` on
+      // the resulting object.
+      metadata: {
+        'video-id': pending.id,
+        'podcast-id': podcastId,
+        'team-id': user.id,
+        'uploader-id': user.id,
+      },
     });
   } catch (err) {
     // Roll back the pending row if S3 says no — otherwise we leak orphan rows.

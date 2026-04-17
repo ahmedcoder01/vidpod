@@ -1,0 +1,24 @@
+# Local Postgres for dev. Started with `docker compose up -d`.
+# Both the Next.js app and the Go worker share this DB.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vidpod-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vidpod
+      POSTGRES_PASSWORD: vidpod-dev-pw
+      POSTGRES_DB: vidpod
+    ports:
+      - "5432:5432"
+    volumes:
+      - vidpod-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vidpod -d vidpod"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  vidpod-pgdata:

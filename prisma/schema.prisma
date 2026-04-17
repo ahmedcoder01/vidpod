@@ -2,7 +2,7 @@
 // Phase 1 infra — SQLite via Prisma. See plan for design notes.
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 generator client {
