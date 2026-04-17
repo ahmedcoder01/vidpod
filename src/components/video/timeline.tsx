@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, startTransition } from 'react';
 import { Ad, AdMarker } from '@/lib/types';
 
 const DEFAULT_AD_DUR = 30;
@@ -257,6 +257,94 @@ export function Timeline({
   const innerW = Math.max(visibleW, visibleW * zoom);
   const pxPerSec = innerW / totalDur;
 
+  // Memoized waveform SVG. Deliberately does NOT depend on playheadDisplayTime
+  // or currentTime — the "played-region" brightness is painted by a single
+  // overlay div (see below), not by per-bar opacity. Keeping this stable
+  // across timeupdate ticks is the core of the perf fix: 300 <rect>s no
+  // longer diff 4× per second.
+  const waveformSvg = useMemo(() => {
+    return segments.map((seg, i) => {
+      const segLeftPx = seg.displayStart * pxPerSec;
+      const segWidthPx = (seg.displayEnd - seg.displayStart) * pxPerSec;
+      const srcLen = waveformData.length;
+
+      // Empty state — backend hasn't populated waveformData yet.
+      if (srcLen === 0) {
+        return (
+          <div
+            key={i}
+            className="absolute top-0 bottom-0 waveform-shimmer"
+            style={{
+              left: segLeftPx,
+              width: segWidthPx,
+              background:
+                'linear-gradient(180deg, #f0abfc 0%, #e879f9 50%, #f0abfc 100%)',
+              pointerEvents: 'none',
+            }}
+          />
+        );
+      }
+
+      const totalBars = Math.max(8, Math.floor(segWidthPx / 4));
+      const srcStart = (seg.videoStart / videoDur) * srcLen;
+      const srcEnd = (seg.videoEnd / videoDur) * srcLen;
+      const midY = STRIP_H / 2;
+      const halfMax = STRIP_H * 0.42;
+      const barGap = 1;
+      const barW = Math.max(
+        1.5,
+        (segWidthPx - barGap * (totalBars - 1)) / totalBars,
+      );
+
+      return (
+        <svg
+          key={i}
+          className="absolute"
+          style={{
+            top: 0,
+            left: segLeftPx,
+            width: segWidthPx,
+            height: STRIP_H,
+            background: '#f0abfc',
+            pointerEvents: 'none',
+          }}
+          viewBox={`0 0 ${Math.max(1, segWidthPx)} ${STRIP_H}`}
+          preserveAspectRatio="none"
+        >
+          {Array.from({ length: totalBars }).map((_, k) => {
+            const srcIdx = Math.floor(
+              srcStart + ((k + 0.5) / totalBars) * (srcEnd - srcStart),
+            );
+            const rawAmp = waveformData[clamp(srcIdx, 0, srcLen - 1)] ?? 0;
+            const amp = Math.max(0.06, rawAmp);
+            const halfH = amp * halfMax;
+            const xCenter = ((k + 0.5) / totalBars) * segWidthPx;
+            const x = xCenter - barW / 2;
+
+            // Stagger-rise on mount only. Delay is small enough to stay
+            // under 150ms total for a 300-bar strip.
+            const delay = `${(k * 0.4).toFixed(1)}ms`;
+
+            return (
+              <rect
+                key={k}
+                className="waveform-bar"
+                x={x}
+                y={midY - halfH}
+                width={barW}
+                height={halfH * 2}
+                rx={Math.min(barW / 2, 1.2)}
+                fill="#ffffff"
+                opacity={0.82}
+                style={{ ['--d' as string]: delay } as React.CSSProperties}
+              />
+            );
+          })}
+        </svg>
+      );
+    });
+  }, [segments, waveformData, pxPerSec, videoDur]);
+
   const derivedDisplayTime = displayTimeFromVideoTime(currentTime);
 
   // While an ad is playing the main video is paused, so derivedDisplayTime
@@ -393,8 +481,12 @@ export function Timeline({
     window.addEventListener('mouseup', onUp);
   }
 
+  // Zoom updates are interruptible — React can defer the heavy waveform
+  // re-layout so the slider thumb / button click stays responsive.
   const bumpZoom = (delta: number) =>
-    setZoom((z) => clamp(+(z + delta).toFixed(2), 1, 8));
+    startTransition(() =>
+      setZoom((z) => clamp(+(z + delta).toFixed(2), 1, 8)),
+    );
 
   // Wheel handling on the strip: Ctrl/⌘+wheel zooms (anchored at cursor),
   // plain wheel scrolls horizontally. Always preventDefault so the page
@@ -418,7 +510,7 @@ export function Timeline({
           8,
         );
         if (next === zoom) return;
-        setZoom(next);
+        startTransition(() => setZoom(next));
         // After the zoom applies, re-anchor so the cursor stays over the
         // same display-time point.
         requestAnimationFrame(() => {
@@ -507,7 +599,10 @@ export function Timeline({
             max={8}
             step={0.1}
             value={zoom}
-            onChange={(e) => setZoom(Number(e.target.value))}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              startTransition(() => setZoom(v));
+            }}
             className="timeline-zoom w-36 cursor-pointer"
           />
           <button
@@ -552,124 +647,28 @@ export function Timeline({
                 }}
                 onMouseDown={isLoading ? undefined : onStripMouseDown}
               >
-                {/* Waveform segments — each sits between ads, so ads truly
-                    split the clip. Rendered as inline SVG: mirrored bars
-                    with a warm "played" gradient on the left of the playhead
-                    and a cool "upcoming" gradient on the right. Empty state
-                    (waveform not yet analyzed) shows a drifting shimmer band. */}
-                {segments.map((seg, i) => {
-                  const segLeftPx = seg.displayStart * pxPerSec;
-                  const segWidthPx = (seg.displayEnd - seg.displayStart) * pxPerSec;
-                  const srcLen = waveformData.length;
+                {/* Waveform segments. Memoized — see `waveformSvg` above.
+                    Independent of currentTime/playhead so timeupdate ticks
+                    don't rerender the 300+ <rect>s. */}
+                {waveformSvg}
 
-                  // Empty state — backend hasn't populated waveformData yet.
-                  // Soft shimmering pink band communicates "still processing"
-                  // without a blocking spinner. Per-segment so ad blocks
-                  // still visually split the strip even before analysis.
-                  if (srcLen === 0) {
-                    return (
-                      <div
-                        key={i}
-                        className="absolute top-0 bottom-0 waveform-shimmer"
-                        style={{
-                          left: segLeftPx,
-                          width: segWidthPx,
-                          background:
-                            'linear-gradient(180deg, #f0abfc 0%, #e879f9 50%, #f0abfc 100%)',
-                          pointerEvents: 'none',
-                        }}
-                      />
-                    );
-                  }
-
-                  // Resample waveformData onto the segment. One bar per ~4px
-                  // of segment width (min 8) — matches the original density
-                  // the backend engineer recommended we keep.
-                  const totalBars = Math.max(8, Math.floor(segWidthPx / 4));
-                  const srcStart = (seg.videoStart / videoDur) * srcLen;
-                  const srcEnd = (seg.videoEnd / videoDur) * srcLen;
-                  const midY = STRIP_H / 2;
-                  const halfMax = STRIP_H * 0.42; // leave a touch of padding top+bottom
-                  const barGap = 1;
-                  const barW = Math.max(
-                    1.5,
-                    (segWidthPx - barGap * (totalBars - 1)) / totalBars,
-                  );
-
-                  // Gradient IDs are scoped per-segment so multiple SVGs on
-                  // the page don't collide. `i` is segment index.
-                  const coolId = `wv-cool-${i}`;
-                  const warmId = `wv-warm-${i}`;
-
-                  return (
-                    <svg
-                      key={i}
-                      className="absolute"
-                      style={{
-                        top: 0,
-                        left: segLeftPx,
-                        width: segWidthPx,
-                        height: STRIP_H,
-                        background: '#f0abfc',
-                        pointerEvents: 'none',
-                      }}
-                      viewBox={`0 0 ${Math.max(1, segWidthPx)} ${STRIP_H}`}
-                      preserveAspectRatio="none"
-                    >
-                      <defs>
-                        {/* Played — solid white bars against the pink field. */}
-                        <linearGradient id={warmId} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%"   stopColor="#ffffff" />
-                          <stop offset="100%" stopColor="#ffffff" />
-                        </linearGradient>
-                        {/* Upcoming — same white, slightly dimmer via opacity. */}
-                        <linearGradient id={coolId} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%"   stopColor="#ffffff" />
-                          <stop offset="100%" stopColor="#ffffff" />
-                        </linearGradient>
-                      </defs>
-
-                      {Array.from({ length: totalBars }).map((_, k) => {
-                        const srcIdx = Math.floor(
-                          srcStart + ((k + 0.5) / totalBars) * (srcEnd - srcStart),
-                        );
-                        const rawAmp = waveformData[clamp(srcIdx, 0, srcLen - 1)] ?? 0;
-                        // Floor so silent regions still have silhouette —
-                        // dead-flat bars look like a bug, not a quiet moment.
-                        const amp = Math.max(0.06, rawAmp);
-                        const halfH = amp * halfMax;
-                        const xCenter = ((k + 0.5) / totalBars) * segWidthPx;
-                        const x = xCenter - barW / 2;
-
-                        // Played vs upcoming — compared by display time, so
-                        // the colour front travels with the red playhead.
-                        const barT =
-                          seg.displayStart +
-                          ((k + 0.5) / totalBars) * (seg.displayEnd - seg.displayStart);
-                        const played = barT <= playheadDisplayTime;
-
-                        // Subtle stagger on mount only. 0.4ms per bar keeps
-                        // 300 bars under 150ms of total lag — feels snappy.
-                        const delay = `${(k * 0.4).toFixed(1)}ms`;
-
-                        return (
-                          <rect
-                            key={k}
-                            className="waveform-bar"
-                            x={x}
-                            y={midY - halfH}
-                            width={barW}
-                            height={halfH * 2}
-                            rx={Math.min(barW / 2, 1.2)}
-                            fill={played ? `url(#${warmId})` : `url(#${coolId})`}
-                            opacity={played ? 1 : 0.82}
-                            style={{ ['--d' as string]: delay } as React.CSSProperties}
-                          />
-                        );
-                      })}
-                    </svg>
-                  );
-                })}
+                {/* Played-region overlay. One element; its width is the only
+                    thing that updates on timeupdate. The low-alpha white
+                    bump makes bars to the left of the playhead read slightly
+                    brighter, matching the old per-bar opacity split. */}
+                {!isLoading && (
+                  <div
+                    className="absolute top-0 bottom-0 pointer-events-none"
+                    style={{
+                      left: 0,
+                      width: Math.max(0, playheadPx),
+                      background: 'rgba(255,255,255,0.14)',
+                      mixBlendMode: 'screen',
+                      zIndex: 5,
+                      transition: playheadTransition,
+                    }}
+                  />
+                )}
 
                 {/* Ad markers — fill their slots completely (no floating) */}
                 {adLayout.map((a) => {
