@@ -48,6 +48,81 @@ body {
 .animate-fade-in { animation: fadeIn 0.15s ease-out; }
 .animate-slide-in { animation: slideIn 0.15s ease-out; }
 
+/* Transcript button: filled dark gradient that slowly pans, a diagonal
+   glint that sweeps across every few seconds, and a soft float. Signals a
+   shiny new feature without being loud. Everything respects
+   prefers-reduced-motion. */
+@keyframes transcriptPan {
+  0%   { background-position:   0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position:   0% 50%; }
+}
+@keyframes transcriptGlint {
+  0%, 62%  { transform: translateX(-120%) skewX(-18deg); opacity: 0; }
+  70%      { opacity: 0.85; }
+  100%     { transform: translateX(280%) skewX(-18deg); opacity: 0; }
+}
+@keyframes transcriptFloat {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-1.5px); }
+}
+@keyframes transcriptSparkle {
+  0%, 100% { transform: rotate(0deg) scale(1);   opacity: 1; }
+  30%      { transform: rotate(-14deg) scale(1.15); opacity: 0.9; }
+  60%      { transform: rotate(12deg) scale(1.1);  opacity: 1; }
+}
+
+.transcript-fancy {
+  background-image: linear-gradient(
+    110deg,
+    #111827 0%,
+    #4338ca 28%,
+    #7c3aed 50%,
+    #db2777 72%,
+    #111827 100%
+  );
+  background-size: 220% 100%;
+  animation:
+    transcriptPan 6s ease-in-out infinite,
+    transcriptFloat 3.6s ease-in-out infinite;
+}
+.transcript-fancy::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.0) 30%,
+    rgba(255, 255, 255, 0.75) 50%,
+    rgba(255, 255, 255, 0.0) 70%,
+    transparent 100%
+  );
+  pointer-events: none;
+  animation: transcriptGlint 3.4s ease-in-out infinite;
+  mix-blend-mode: overlay;
+}
+.transcript-fancy:hover {
+  animation-play-state: paused, paused;
+}
+.transcript-fancy:hover::before {
+  animation-play-state: paused;
+}
+.transcript-sparkle {
+  animation: transcriptSparkle 2.8s ease-in-out infinite;
+  transform-origin: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .transcript-fancy,
+  .transcript-fancy::before,
+  .transcript-sparkle {
+    animation: none;
+  }
+  .transcript-fancy { background-position: 25% 50%; }
+}
+
 /* Timeline scrollbar */
 .timeline-scroll::-webkit-scrollbar {
   height: 8px;

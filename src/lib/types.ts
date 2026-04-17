@@ -56,6 +56,18 @@ export interface User {
   avatar?: string;
 }
 
+export interface TranscriptWord {
+  text: string;   // word token (may include trailing punctuation)
+  start: number;  // seconds from video start
+  end: number;    // seconds
+  conf: number;   // confidence 0..1
+}
+
+export interface Transcript {
+  text: string;              // concatenated readable transcript
+  words: TranscriptWord[];
+}
+
 // ── Podcast show (a feed/channel) that contains many episodes (Video/Podcast).
 // Distinct from the legacy `Podcast` interface above which represents an
 // episode in the current mocked UI. Will map to the `Podcast` Prisma model

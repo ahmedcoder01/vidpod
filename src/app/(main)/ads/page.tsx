@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { AdMarker, AdType, Ad } from '@/lib/types';
+import { AdMarker, AdType, Ad, Transcript } from '@/lib/types';
 import { formatTime, generateId } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import { useHistory } from '@/hooks/use-history';
@@ -14,8 +14,9 @@ import { CreateMarkerModal } from '@/components/ads/create-marker-modal';
 import { SelectAdsModal } from '@/components/ads/select-ads-modal';
 import {
   Plus, Trash2, Info, ArrowLeft, Play, Radio, Loader2, AlertCircle,
-  CheckCircle2, Clock, Settings, Bell, ChevronDown,
+  CheckCircle2, Clock, Settings, Bell, ChevronDown, Sparkles,
 } from 'lucide-react';
+import { TranscriptPanel } from '@/components/video/transcript-panel';
 
 const TYPE_LABELS = { auto: 'Auto', static: 'Static', ab: 'A/B' };
 const TYPE_BADGE: Record<string, string> = {
@@ -60,6 +61,7 @@ interface VideoDetailDto {
   fullS3Url: string | null;
   playbackUrl: string | null;
   waveformData: number[];
+  transcript: Transcript | null;
   adMarkers: AdMarker[];
   createdAt: string;
   publishedAt: string | null;
@@ -274,6 +276,7 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [pendingType, setPendingType] = useState<AdType | null>(null);
   const [editingMarker, setEditingMarker] = useState<AdMarker | null>(null);
+  const [showTranscript, setShowTranscript] = useState(false);
   const playerRef = useRef<VideoPlayerHandle>(null);
 
   // useHistory needs an initial markers value; wait to seed it until we
@@ -449,7 +452,28 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
               {formatDate(video.publishedAt ?? video.createdAt)}
             </p>
           </div>
-          <div className="pt-1 shrink-0">
+          <div className="pt-1 shrink-0 flex items-center gap-3">
+            {video.transcript && (
+              <button
+                onClick={() => setShowTranscript((v) => !v)}
+                className={cn(
+                  'group relative inline-flex items-center gap-1.5 text-[12px] font-semibold text-white px-3.5 py-2 rounded-lg overflow-hidden transition-[transform,box-shadow] duration-200 active:scale-[0.97]',
+                  showTranscript
+                    ? 'bg-gray-900 hover:bg-gray-800 shadow-[0_1px_2px_rgba(0,0,0,0.1)]'
+                    : 'transcript-fancy shadow-[0_4px_14px_-4px_rgba(124,58,237,0.55),0_2px_4px_rgba(17,24,39,0.15)] hover:shadow-[0_6px_20px_-4px_rgba(124,58,237,0.7),0_2px_6px_rgba(17,24,39,0.2)]',
+                )}
+                aria-pressed={showTranscript}
+              >
+                <Sparkles
+                  size={13}
+                  className={cn(
+                    'shrink-0 relative z-[1]',
+                    !showTranscript && 'transcript-sparkle',
+                  )}
+                />
+                <span className="relative z-[1]">Transcript</span>
+              </button>
+            )}
             <TopbarUser />
           </div>
         </div>
@@ -527,18 +551,28 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
           </div>
         </div>
 
-        {/* RIGHT: Video player */}
-        <div className="flex-1 min-w-0">
-          <VideoPlayer
-            ref={playerRef}
-            src={video.playbackUrl ?? ''}
-            adMarkers={markers}
-            ads={ads}
-            onTimeUpdate={setCurrentTime}
-            onDurationChange={setDuration}
-            onAdProgress={setAdProgress}
-            onError={setVideoError}
-          />
+        {/* RIGHT: Video player (+ optional transcript panel) */}
+        <div className="flex-1 min-w-0 flex gap-3">
+          <div className="flex-1 min-w-0">
+            <VideoPlayer
+              ref={playerRef}
+              src={video.playbackUrl ?? ''}
+              adMarkers={markers}
+              ads={ads}
+              onTimeUpdate={setCurrentTime}
+              onDurationChange={setDuration}
+              onAdProgress={setAdProgress}
+              onError={setVideoError}
+            />
+          </div>
+          {showTranscript && video.transcript && (
+            <TranscriptPanel
+              transcript={video.transcript}
+              currentTime={currentTime}
+              onSeek={handleSeek}
+              onClose={() => setShowTranscript(false)}
+            />
+          )}
         </div>
       </div>
 

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getCurrentUser } from '@/lib/auth';
 import { keyFromFullS3Url, getPlaybackUrl } from '@/lib/s3';
+import type { Transcript } from '@/lib/types';
 
 // Shape returned by both GET and PATCH so the client can hot-swap state.
 interface VideoDetailDto {
@@ -17,6 +18,7 @@ interface VideoDetailDto {
   chunksURL: string | null;
   playbackUrl: string | null;
   waveformData: number[];
+  transcript: Transcript | null;
   adMarkers: {
     id: string;
     type: string;
@@ -38,8 +40,37 @@ function safeParseArray<T = unknown>(raw: string): T[] {
   }
 }
 
+// Accepts the backend worker's shape { text, words: [{text,start,end,conf}] }.
+// Anything missing/invalid → null so the UI treats it as "no transcript yet".
+function safeParseTranscript(raw: string | null | undefined): Transcript | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    if (!v || typeof v !== 'object') return null;
+    const text = typeof v.text === 'string' ? v.text : '';
+    const rawWords: unknown = v.words;
+    if (!Array.isArray(rawWords)) return null;
+    const words = rawWords
+      .filter(
+        (w): w is { text: unknown; start: unknown; end: unknown; conf: unknown } =>
+          !!w && typeof w === 'object',
+      )
+      .map((w) => ({
+        text: typeof w.text === 'string' ? w.text : '',
+        start: Number(w.start),
+        end: Number(w.end),
+        conf: Number(w.conf),
+      }))
+      .filter((w) => w.text && Number.isFinite(w.start) && Number.isFinite(w.end));
+    return { text, words };
+  } catch {
+    return null;
+  }
+}
+
 async function buildDto(
   video: Awaited<ReturnType<typeof prisma.video.findFirst>> & {
+    transcript: string | null;
     adMarkers: {
       id: string;
       type: string;
@@ -77,6 +108,7 @@ async function buildDto(
     chunksURL: video.chunksURL,
     playbackUrl,
     waveformData: safeParseArray<number>(video.waveformData),
+    transcript: safeParseTranscript(video.transcript),
     adMarkers: video.adMarkers
       .map((m) => ({
         id: m.id,
