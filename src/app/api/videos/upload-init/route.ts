@@ -2,10 +2,9 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getCurrentUser } from '@/lib/auth';
 import {
-  UPLOAD_PREFIX,
+  buildVideoObjectKey,
   createMultipartUploadWithParts,
   partCountFor,
-  sanitizeFilename,
   MAX_FILE_SIZE_BYTES,
 } from '@/lib/s3';
 
@@ -54,8 +53,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'File is larger than 5 GiB' }, { status: 413 });
   }
 
-  const safeFilename = sanitizeFilename(filename);
-
   // Persist the pending Video first so we have a stable id to namespace the
   // S3 key under. author comes from the signed-in user's display name.
   const pending = await prisma.video.create({
@@ -71,7 +68,11 @@ export async function POST(req: Request) {
     select: { id: true },
   });
 
-  const key = `${UPLOAD_PREFIX}${podcastId}/${pending.id}/${safeFilename}`;
+  // Canonical key layout:
+  //   videos/podcasts/{teamId}/{videoId}/{prefix}+full-podcast-video.mp4
+  // teamId is the current user.id until a proper Team entity exists.
+  // TODO: when Teams land, swap `user.id` for the user's `teamId`.
+  const key = buildVideoObjectKey({ teamId: user.id, videoId: pending.id });
 
   let init;
   try {

@@ -15,7 +15,7 @@ const BUCKET = process.env.AWS_S3_BUCKET;
 const ACCESS_KEY = process.env.AWS_ACCESS_KEY_ID;
 const SECRET_KEY = process.env.AWS_SECRET_ACCESS_KEY;
 
-export const UPLOAD_PREFIX = (process.env.AWS_S3_UPLOAD_PREFIX ?? 'videos/').replace(/^\/+|\/+$/g, '') + '/';
+const UPLOAD_PREFIX = (process.env.AWS_S3_UPLOAD_PREFIX ?? 'videos/').replace(/^\/+|\/+$/g, '') + '/';
 const PUBLIC_URL_BASE = (process.env.AWS_S3_PUBLIC_URL_BASE ?? '').replace(/\/+$/, '');
 
 function requireEnv(): void {
@@ -45,6 +45,40 @@ export const PART_SIZE_BYTES = 5 * 1024 * 1024; // 5 MiB — S3's minimum, excep
 export const MAX_PART_COUNT = 10_000;            // S3 hard cap.
 export const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024; // 5 GiB — safe upper bound for this phase.
 const SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour — enough time for slow connections.
+
+// The backend processing workflow triggers on keys ending with this exact
+// suffix — keep it canonical across every upload.
+export const OBJECT_FILENAME_SUFFIX = 'full-podcast-video.mp4';
+
+// Hard-coded path segment that sits between the env-driven upload prefix
+// (default "videos/") and the team scope. The Go worker expects this layout:
+//   videos/podcasts/{teamId}/{videoId}/{prefix}+{suffix}
+const PODCASTS_SEGMENT = 'podcasts/';
+
+/**
+ * Build the canonical S3 object key for a video upload.
+ *
+ * Format:  {UPLOAD_PREFIX}podcasts/{teamId}/{videoId}/{prefix}+{OBJECT_FILENAME_SUFFIX}
+ * Example: videos/podcasts/u1/cmo3abc…/cmo3abc0x7+full-podcast-video.mp4
+ *
+ * - `teamId` scopes per-tenant. Today we pass `user.id` (see upload-init);
+ *   when a Team entity lands this becomes `user.teamId`.
+ * - `videoId` (cuid) guarantees the path is collision-free — re-uploading
+ *   the same source file produces a new Video row and therefore a new key.
+ * - The `{prefix}+` on the filename is an extra uniqueness tag required by
+ *   the worker's filename convention. A 10-char slice of the cuid is plenty
+ *   (cuids are globally unique, so any prefix of one already is).
+ */
+export function buildVideoObjectKey(args: {
+  teamId: string;
+  videoId: string;
+}): string {
+  const prefix = args.videoId.slice(0, 10);
+  return (
+    `${UPLOAD_PREFIX}${PODCASTS_SEGMENT}` +
+    `${args.teamId}/${args.videoId}/${prefix}+${OBJECT_FILENAME_SUFFIX}`
+  );
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 export function publicUrlFor(key: string): string {
@@ -134,16 +168,3 @@ export async function abortMultipartUpload(args: { key: string; uploadId: string
   );
 }
 
-// Sanitize a filename so it's safe as part of an S3 object key. Keeps the
-// extension, replaces anything else with `_`. S3 accepts most characters but
-// signed URLs + CORS tend to be fussier.
-export function sanitizeFilename(name: string): string {
-  const lastDot = name.lastIndexOf('.');
-  const base = (lastDot > 0 ? name.slice(0, lastDot) : name)
-    .replace(/[^a-zA-Z0-9._-]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 120);
-  const ext = (lastDot > 0 ? name.slice(lastDot + 1) : '').replace(/[^a-zA-Z0-9]+/g, '').slice(0, 10);
-  const safeBase = base || 'video';
-  return ext ? `${safeBase}.${ext}` : safeBase;
-}

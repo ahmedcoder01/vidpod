@@ -10,6 +10,7 @@ import {
   type PresignedPart,
   type UploadProgress,
   type PartState,
+  type UploadPartResult,
   uploadFileInParts,
   formatBytes,
   formatBytesPerSec,
@@ -150,11 +151,8 @@ export function UploadVideoModal({ initialFile, onClose, onUploaded }: Props) {
       const init = (await initRes.json()) as InitResponse;
       setInitResp(init);
 
-      // 2) upload parts → S3 directly. No /upload-complete call: completion
-      // is finalized by a backend worker listening for S3 events (out of
-      // scope for this phase). The Video row stays `pending` in the DB until
-      // that worker picks it up and flips the status.
-      await uploadFileInParts(
+      // 2) upload parts → S3 directly, collecting ETags for the finalize.
+      const results: UploadPartResult[] = await uploadFileInParts(
         file,
         init.parts,
         init.partSize,
@@ -164,6 +162,27 @@ export function UploadVideoModal({ initialFile, onClose, onUploaded }: Props) {
           onProgress: setProgress,
         },
       );
+
+      // 3) finalize → server calls S3 CompleteMultipartUpload (which
+      // cryptographically verifies the parts exist + ETags match) and flips
+      // the DB row from `pending` to `uploaded`. Transcoding + later
+      // status transitions are handled by the Go worker reacting to the
+      // S3 `ObjectCreated:CompleteMultipartUpload` event.
+      const completeRes = await apiFetch(`/api/videos/${init.videoId}/upload-complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uploadId: init.uploadId,
+          key: init.key,
+          parts: results,
+          duration: probedDuration ?? undefined,
+        }),
+        signal: controller.signal,
+      });
+      if (!completeRes.ok) {
+        const body = await completeRes.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `Finalize failed (${completeRes.status})`);
+      }
 
       go('done', 'forward');
       onUploaded?.();
@@ -681,11 +700,11 @@ function DoneStep({ title }: { title: string }) {
         </svg>
       </div>
       <div>
-        <p className="text-sm font-semibold text-zinc-900">Upload received</p>
+        <p className="text-sm font-semibold text-zinc-900">Upload complete</p>
         <p className="text-xs text-zinc-500 mt-1 max-w-xs">
-          <span className="font-medium text-zinc-700">{title}</span> is uploading to S3. We&apos;ll finish
-          processing it in the background and it will appear as <span className="font-medium text-zinc-700">Ready</span> when
-          it&apos;s done.
+          <span className="font-medium text-zinc-700">{title}</span> is now in your library. We&apos;ll
+          process it in the background and it will show up as
+          <span className="font-medium text-zinc-700"> Ready</span> when transcoding finishes.
         </p>
       </div>
     </div>
