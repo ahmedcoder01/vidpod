@@ -1,16 +1,21 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useApp } from '@/context/app-context';
 import { PodcastShow } from '@/lib/types';
 import { CreatePodcastModal } from '@/components/podcast/create-podcast-modal';
+import { UploadVideoModal } from '@/components/video/upload-video-modal';
 import {
   LayoutDashboard, BarChart2, Radio, Layers, Download, Settings,
   ChevronDown, Users, MessageSquare, HelpCircle, ToggleLeft, Check, Plus, Loader2,
 } from 'lucide-react';
+
+// Fired by the sidebar after a successful upload so any mounted dashboard /
+// episodes list can re-fetch its video list without a full navigation.
+export const VIDEO_UPLOADED_EVENT = 'vp:video-uploaded';
 
 const mainNav = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
@@ -190,6 +195,26 @@ function PodcastDropdown() {
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { currentPodcastId } = useApp();
+  const [uploadOpen, setUploadOpen] = useState(false);
+
+  const canUpload = !!currentPodcastId;
+
+  function handleCreateEpisode() {
+    if (!canUpload) return;
+    setUploadOpen(true);
+  }
+
+  function handleUploaded() {
+    // Tell any mounted list views to refresh. Dashboard/Ads pages listen for
+    // this event and re-fetch; if the user is on another page we navigate
+    // them to the dashboard so they can see the new episode.
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(VIDEO_UPLOADED_EVENT));
+    }
+    if (pathname !== '/dashboard') router.push('/dashboard');
+  }
 
   return (
     <aside className="w-[175px] min-w-[175px] h-screen flex flex-col bg-white border-r border-gray-100 overflow-hidden">
@@ -204,9 +229,17 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* Create episode */}
+      {/* Create episode — opens the same UploadVideoModal used on the
+          dashboard's drop zone. Disabled until a podcast is selected,
+          since episodes need a parent show. */}
       <div className="px-3 pb-2">
-        <button className="w-full bg-gray-900 hover:bg-gray-800 text-white text-[11px] font-medium rounded-lg py-2 px-3 transition flex items-center justify-center gap-1">
+        <button
+          type="button"
+          onClick={handleCreateEpisode}
+          disabled={!canUpload}
+          title={canUpload ? 'Create an episode' : 'Select a podcast first'}
+          className="w-full bg-gray-900 hover:bg-gray-800 text-white text-[11px] font-medium rounded-lg py-2 px-3 transition flex items-center justify-center gap-1 disabled:bg-gray-300 disabled:cursor-not-allowed"
+        >
           Create an episode
         </button>
       </div>
@@ -290,6 +323,13 @@ export function Sidebar() {
           </Link>
         ))}
       </div>
+
+      {uploadOpen && (
+        <UploadVideoModal
+          onClose={() => setUploadOpen(false)}
+          onUploaded={handleUploaded}
+        />
+      )}
     </aside>
   );
 }

@@ -8,6 +8,8 @@ import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { useApp } from '@/context/app-context';
 import { UploadVideoModal } from '@/components/video/upload-video-modal';
+import { UserMenu } from '@/components/user-menu';
+import { VIDEO_UPLOADED_EVENT } from '@/components/sidebar';
 
 type StatusKey = 'pending' | 'uploaded' | 'chunking' | 'completed';
 
@@ -78,6 +80,14 @@ export default function DashboardPage() {
     loadVideos();
   }, [loadVideos]);
 
+  // Refresh when an upload completes elsewhere in the app (e.g. from the
+  // sidebar's "Create an episode" button while the user is already here).
+  useEffect(() => {
+    const handler = () => { void loadVideos(); };
+    window.addEventListener(VIDEO_UPLOADED_EVENT, handler);
+    return () => window.removeEventListener(VIDEO_UPLOADED_EVENT, handler);
+  }, [loadVideos]);
+
   const openUploadModal = useCallback((prefill: File | null = null) => {
     if (!currentPodcastId) return; // nothing to upload to yet
     setModalInitialFile(prefill);
@@ -115,12 +125,7 @@ export default function DashboardPage() {
             </p>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center text-white text-xs font-semibold">
-            EW
-          </div>
-          <span className="text-zinc-700 text-sm font-medium">Emma Warren</span>
-        </div>
+        <UserMenu />
       </div>
 
       <div className="p-6 space-y-6">

@@ -453,88 +453,107 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         ))}
       </div>
 
-      {/* Controls */}
-      <div className="px-3 py-3 flex items-center justify-between gap-1">
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => { if (!adSession && videoRef.current) videoRef.current.currentTime = 0; }}
-            disabled={!!adSession}
-            className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/>
+      {/* Controls
+          Jump-to-start and Jump-to-end sit pinned at the left/right edges;
+          the 10s skips + double-chevrons + play/pause form a compact
+          centered cluster. Icon sizes are tuned to match the timeline's
+          Undo/Redo so the page reads as one consistent control family. */}
+      <div className="px-4 py-2.5 flex items-center justify-between gap-2">
+        <button
+          onClick={() => { if (!adSession && videoRef.current) videoRef.current.currentTime = 0; }}
+          disabled={!!adSession}
+          title="Jump to start"
+          className="flex items-center gap-1.5 text-[12px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
+        >
+          <span className="w-6 h-6 rounded-full border border-gray-300 flex items-center justify-center bg-white hover:border-gray-400 transition">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="19 20 9 12 19 4 19 20" />
+              <line x1="5" y1="19" x2="5" y2="5" />
             </svg>
-            <span className="hidden sm:inline">Jump to start</span>
-          </button>
+          </span>
+          <span className="font-medium hidden sm:inline">Jump to start</span>
+        </button>
+
+        <div className="flex items-center gap-5">
           <button
             onClick={() => seekBy(-10)}
             disabled={!!adSession}
-            className="flex items-center gap-0.5 text-[11px] text-gray-500 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
+            title="Back 10 seconds"
+            className="flex items-center gap-1 text-[12px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.51"/>
+              <polyline points="1 4 1 10 7 10" />
+              <path d="M3.51 15a9 9 0 1 0 .49-3.51" />
             </svg>
-            <span>10s</span>
+            <span className="font-medium tabular-nums">10s</span>
           </button>
-        </div>
-
-        <div className="flex items-center gap-2">
           <button
             onClick={() => seekBy(-5)}
             disabled={!!adSession}
-            className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition"
+            title="Rewind 5 seconds"
+            aria-label="Rewind 5 seconds"
+            className="text-gray-900 hover:text-black disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-90"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M11 5L1 12l10 7V5zm11 0L12 12l10 7V5z"/>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M11 5L1 12l10 7V5zm11 0L12 12l10 7V5z" />
             </svg>
           </button>
           <button
             onClick={togglePlay}
-            className="w-9 h-9 bg-gray-900 hover:bg-gray-700 text-white rounded-full flex items-center justify-center transition shadow-sm active:scale-95"
+            title={playing ? 'Pause' : 'Play'}
+            aria-label={playing ? 'Pause' : 'Play'}
+            className="text-gray-900 hover:text-black transition active:scale-90"
           >
             {playing ? (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="4" width="4" height="16" rx="0.5" />
+                <rect x="14" y="4" width="4" height="16" rx="0.5" />
               </svg>
             ) : (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="ml-0.5">
-                <polygon points="5 3 19 12 5 21 5 3"/>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="6 3 21 12 6 21 6 3" />
               </svg>
             )}
           </button>
           <button
             onClick={() => seekBy(5)}
             disabled={!!adSession}
-            className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition"
+            title="Forward 5 seconds"
+            aria-label="Forward 5 seconds"
+            className="text-gray-900 hover:text-black disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-90"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M13 5l10 7-10 7V5zM2 5l10 7-10 7V5z"/>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M13 5l10 7-10 7V5zM2 5l10 7-10 7V5z" />
+            </svg>
+          </button>
+          <button
+            onClick={() => seekBy(10)}
+            disabled={!!adSession}
+            title="Forward 10 seconds"
+            className="flex items-center gap-1 text-[12px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
+          >
+            <span className="font-medium tabular-nums">10s</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-.49-3.51" />
             </svg>
           </button>
         </div>
 
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => seekBy(10)}
-            disabled={!!adSession}
-            className="flex items-center gap-0.5 text-[11px] text-gray-500 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
-          >
-            <span>10s</span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-.49-3.51"/>
+        <button
+          onClick={() => { if (!adSession) { const v = videoRef.current; if (v) v.currentTime = v.duration; } }}
+          disabled={!!adSession}
+          title="Jump to end"
+          className="flex items-center gap-1.5 text-[12px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
+        >
+          <span className="font-medium hidden sm:inline">Jump to end</span>
+          <span className="w-6 h-6 rounded-full border border-gray-300 flex items-center justify-center bg-white hover:border-gray-400 transition">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="5 4 15 12 5 20 5 4" />
+              <line x1="19" y1="5" x2="19" y2="19" />
             </svg>
-          </button>
-          <button
-            onClick={() => { if (!adSession) { const v = videoRef.current; if (v) v.currentTime = v.duration; } }}
-            disabled={!!adSession}
-            className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition px-2 py-1.5 rounded-lg hover:bg-gray-100"
-          >
-            <span className="hidden sm:inline">Jump to end</span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/>
-            </svg>
-          </button>
-        </div>
+          </span>
+        </button>
       </div>
 
       {/* Volume + speed row */}

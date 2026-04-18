@@ -14,9 +14,10 @@ import { CreateMarkerModal } from '@/components/ads/create-marker-modal';
 import { SelectAdsModal } from '@/components/ads/select-ads-modal';
 import {
   Plus, Trash2, Info, ArrowLeft, Play, Radio, Loader2, AlertCircle,
-  CheckCircle2, Clock, Settings, Bell, ChevronDown, Sparkles,
+  CheckCircle2, Clock, Settings, Bell, Sparkles,
 } from 'lucide-react';
 import { TranscriptPanel } from '@/components/video/transcript-panel';
+import { UserMenu } from '@/components/user-menu';
 
 const TYPE_LABELS = { auto: 'Auto', static: 'Static', ab: 'A/B' };
 const TYPE_BADGE: Record<string, string> = {
@@ -69,6 +70,9 @@ interface VideoDetailDto {
 }
 
 // ── Topbar user chip ──────────────────────────────────────────────────
+// Settings and Bell remain decorative for now; the user chip is wired up
+// to real auth via <UserMenu /> (shows the signed-in user and provides a
+// functional Log out action).
 function TopbarUser() {
   return (
     <div className="flex items-center gap-3">
@@ -79,13 +83,7 @@ function TopbarUser() {
         <Bell size={16} />
         <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-red-500 rounded-full" />
       </button>
-      <button className="flex items-center gap-2 hover:bg-gray-100 rounded-lg px-2 py-1.5 transition">
-        <div className="w-6 h-6 rounded-full bg-linear-to-br from-purple-400 to-pink-500 flex items-center justify-center text-white text-[10px] font-bold shrink-0">
-          EW
-        </div>
-        <span className="text-gray-700 text-sm font-medium">Emma Warren</span>
-        <ChevronDown size={13} className="text-gray-400" />
-      </button>
+      <UserMenu />
     </div>
   );
 }

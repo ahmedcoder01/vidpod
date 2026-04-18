@@ -872,7 +872,7 @@ export function Timeline({
                       </div>
 
                       {/* Floating delete button — appears on selection */}
-                      {isSel && onMarkerDelete && (
+                      {/* {isSel && onMarkerDelete && (
                         <button
                           onMouseDown={(e) => e.stopPropagation()}
                           onClick={(e) => {
@@ -892,7 +892,7 @@ export function Timeline({
                             <line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/>
                           </svg>
                         </button>
-                      )}
+                      )} */}
                     </div>
                   );
                 })}
