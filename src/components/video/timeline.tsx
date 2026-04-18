@@ -249,17 +249,80 @@ export function Timeline({
     return segs;
   }, [adLayout, videoDur]);
 
+  // Proof-of-completion set for ad markers. An ad earns its place here
+  // the moment `adProgress` transitions away from it (session ended and
+  // the main video resumed). Used by `adOffsetAtVideoTime` below to
+  // tell a just-entered ad boundary (`currentTime` edged past the
+  // marker, parent hasn't yet flipped `adProgress`) apart from a
+  // just-exited one (same `currentTime` position but the ad has
+  // played) — the two cases are visually opposite and can't be
+  // distinguished from `currentTime` alone.
+  //
+  // Updated synchronously during render so the fresh value is visible
+  // on the same frame as the prop change; a `useEffect`-mediated state
+  // update would land one render late and create the opposite glitch
+  // (playhead jumping *back* for a frame when an ad finishes).
+  // Previous `currentTime` prop value, used both here (to detect backward
+  // seeks that should invalidate ad-completion state) and further down
+  // (for the playback-smoothing `naturalProgress` classifier).
+  const prevCurrentTimeRef = useRef(currentTime);
+
+  const completedAdsRef = useRef<Set<string>>(new Set());
+  const prevAdProgressRef = useRef(adProgress);
+  if (prevAdProgressRef.current !== adProgress) {
+    const prev = prevAdProgressRef.current;
+    const curr = adProgress;
+    let next = completedAdsRef.current;
+    // Session ended for `prev.markerId` → mark completed.
+    if (prev && (!curr || curr.markerId !== prev.markerId) && !next.has(prev.markerId)) {
+      next = new Set(next);
+      next.add(prev.markerId);
+    }
+    // Session (re)started on `curr.markerId` → wipe any prior completion
+    // so it behaves as "fresh" again (handles re-seek-into-played-ad).
+    if (curr && next.has(curr.markerId)) {
+      next = new Set(next);
+      next.delete(curr.markerId);
+    }
+    completedAdsRef.current = next;
+    prevAdProgressRef.current = adProgress;
+  }
+  // Backward seek past an ad's startTime — the user has moved before
+  // it, so completion no longer applies. Clearing here keeps the
+  // just-entered-boundary glitch protection working when they re-cross.
+  if (currentTime < prevCurrentTimeRef.current - 0.5) {
+    let next = completedAdsRef.current;
+    let changed = false;
+    for (const id of next) {
+      const a = sortedIdx.find((x) => x.m.id === id);
+      if (a && a.m.startTime >= currentTime) {
+        if (!changed) { next = new Set(next); changed = true; }
+        next.delete(id);
+      }
+    }
+    if (changed) completedAdsRef.current = next;
+  }
+
   // video → display and display → video helpers.
   const adOffsetAtVideoTime = useCallback(
     (vt: number) => {
       let off = 0;
       for (const a of sortedIdx) {
-        if (a.m.startTime < vt) off += a.dur;
-        else break;
+        if (a.m.startTime >= vt) break;
+        const isActive = adProgress?.markerId === a.m.id;
+        const isCompleted = completedAdsRef.current.has(a.m.id);
+        // If `vt` has crossed this ad's start but neither the ad is
+        // currently playing nor has it completed before, we're inside
+        // the one-frame window just before the parent flips to ad
+        // playback. Park the playhead at this marker's displayStart by
+        // NOT adding its duration to the offset — `adPlayheadTime`
+        // will take over the visual on the very next render.
+        if (!isActive && !isCompleted) break;
+        off += a.dur;
       }
       return off;
     },
-    [sortedIdx],
+    [sortedIdx, adProgress],
   );
 
   const displayTimeFromVideoTime = useCallback(
@@ -449,9 +512,9 @@ export function Timeline({
 
   // Classify the latest `currentTime` delta: a small forward step is natural
   // playback progress (smooth it), anything else is a seek / reverse jump
-  // (snap so the user sees instant feedback). Measured during render; the
-  // ref update is deferred to an effect so we don't mutate state in render.
-  const prevCurrentTimeRef = useRef(currentTime);
+  // (snap so the user sees instant feedback). Shares `prevCurrentTimeRef`
+  // with the ad-completion guard above; the ref is updated in the effect
+  // below so both readers see the same pre-render value.
   const naturalProgress =
     currentTime - prevCurrentTimeRef.current >= 0 &&
     currentTime - prevCurrentTimeRef.current <= 1.0;
