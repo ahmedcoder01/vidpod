@@ -223,6 +223,14 @@ function EpisodesList({ onSelect }: { onSelect: (id: string) => void }) {
   );
 }
 
+// Picks a random ad that has a playable asset. Returns null if none exist —
+// callers must handle the empty case (e.g. skip marker creation, show a hint).
+function pickRandomAd(ads: Ad[]): Ad | null {
+  const playable = ads.filter((a) => !!a.videoUrl);
+  if (!playable.length) return null;
+  return playable[Math.floor(Math.random() * playable.length)];
+}
+
 // ── Ad editor ─────────────────────────────────────────────────────────
 // Fetches a single video by id, passes its signed playback URL to the
 // player and its parsed waveform to the timeline. Marker mutations are
@@ -324,8 +332,15 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
 
   function handleTypeSelected(type: AdType) {
     setShowCreateModal(false);
-    if (type === 'auto') addMarker(type, []);
-    else setPendingType(type);
+    if (type === 'auto') {
+      // Auto = system picks an ad; attach a random playable one at creation
+      // so the marker fires when playback crosses it. Empty adIds would make
+      // `resolveAdForMarker` bail and the marker would silently no-op.
+      const picked = pickRandomAd(ads);
+      addMarker(type, picked ? [picked] : []);
+      return;
+    }
+    setPendingType(type);
   }
 
   function addMarker(type: AdType, pickedAds: Ad[]) {
@@ -333,6 +348,25 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
     push([...markers, {
       id: generateId(), type, startTime: t,
       adIds: pickedAds.map((a) => a.id),
+    }].sort((a, b) => a.startTime - b.startTime));
+  }
+
+  // Places an auto-type marker at a random time with a random ad. Inlined
+  // rather than delegating to `addMarker` because that one reads the current
+  // playhead for its timestamp; we need a uniformly random one.
+  function autoPlaceMarker() {
+    if (!ads.length || !duration) return;
+    const picked = pickRandomAd(ads);
+    if (!picked) return;
+    // Keep clear of the first/last 2s so the marker can't overlap the intro
+    // or clip past the end. No overlap-avoidance with existing markers — MVP.
+    const margin = Math.min(2, duration / 4);
+    const t = margin + Math.random() * Math.max(0, duration - margin * 2);
+    push([...markers, {
+      id: generateId(),
+      type: 'auto' as AdType,
+      startTime: t,
+      adIds: [picked.id],
     }].sort((a, b) => a.startTime - b.startTime));
   }
 
@@ -514,7 +548,18 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
               <Plus size={13} />
               Create ad marker
             </button>
-            <button className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-gray-400 hover:text-gray-700 hover:bg-gray-50 rounded-lg py-2 transition">
+            <button
+              onClick={autoPlaceMarker}
+              disabled={!ads.length || !duration}
+              title={
+                !ads.length
+                  ? 'Upload at least one ad first'
+                  : !duration
+                  ? 'Waiting for video to load'
+                  : 'Place a random ad at a random time'
+              }
+              className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-gray-400 hover:text-gray-700 hover:bg-gray-50 rounded-lg py-2 transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
+            >
               Automatically place
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>
             </button>
