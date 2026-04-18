@@ -4,6 +4,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Ad } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { X, Upload, Film, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import {
+  type PresignedPart,
+  type UploadProgress,
+  type UploadPartResult,
+  uploadFileInParts,
+} from '@/lib/uploader';
 
 interface Props {
   onUploaded: (ad: Ad) => void;
@@ -11,6 +17,14 @@ interface Props {
 }
 
 type Phase = 'form' | 'uploading' | 'finalizing' | 'error';
+
+interface InitResponse {
+  adId: string;
+  uploadId: string;
+  key: string;
+  partSize: number;
+  parts: PresignedPart[];
+}
 
 // Probe the file's duration via a hidden <video> element so we can send it
 // up on /upload-init — the Ad row is useful even without a completion ping.
@@ -52,10 +66,11 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
   const [drag, setDrag] = useState(false);
 
   const [phase, setPhase] = useState<Phase>('form');
-  const [progress, setProgress] = useState(0); // 0..1
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [errMsg, setErrMsg] = useState<string>('');
 
-  const xhrRef = useRef<XMLHttpRequest | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const initRef = useRef<InitResponse | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Esc closes (unless we're uploading — don't trash in-flight data).
@@ -96,7 +111,7 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
   async function handleSubmit() {
     if (!file || !canSubmit) return;
     setErrMsg('');
-    setProgress(0);
+    setProgress(null);
     setPhase('uploading');
 
     const tags = tagsRaw
@@ -105,8 +120,12 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
       .filter(Boolean)
       .slice(0, 20);
 
-    // 1) Init — creates the pending Ad row and returns presigned PUT.
-    let init;
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    // 1) Init — creates the pending Ad row + starts an S3 multipart upload,
+    //    returning an UploadId and one presigned URL per part.
+    let init: InitResponse;
     try {
       const res = await fetch('/api/ads/upload-init', {
         method: 'POST',
@@ -118,78 +137,96 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
           duration: fileDur,
           tags,
           contentType: file.type || 'video/mp4',
+          size: file.size,
         }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error ?? `upload-init failed: ${res.status}`);
       }
-      init = await res.json() as {
-        adId: string;
-        key: string;
-        uploadUrl: string;
-        requiredHeaders: Record<string, string>;
-      };
+      init = await res.json() as InitResponse;
+      initRef.current = init;
     } catch (err) {
+      if ((err as DOMException)?.name === 'AbortError') { abortRef.current = null; return; }
       setErrMsg(err instanceof Error ? err.message : 'Failed to start upload');
       setPhase('error');
+      abortRef.current = null;
       return;
     }
 
-    // 2) PUT straight to S3 with progress. fetch() doesn't expose progress
-    //    reliably yet, so XHR is still the right call.
+    // 2) Upload parts directly to S3 in parallel. Each PUT returns an ETag
+    //    that we hand back to the server for CompleteMultipartUpload.
+    let results: UploadPartResult[];
     try {
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhrRef.current = xhr;
-        xhr.open('PUT', init.uploadUrl, true);
-        for (const [k, v] of Object.entries(init.requiredHeaders)) {
-          xhr.setRequestHeader(k, v);
-        }
-        xhr.upload.onprogress = (ev) => {
-          if (ev.lengthComputable) setProgress(ev.loaded / ev.total);
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve();
-          else reject(new Error(`S3 PUT ${xhr.status}: ${xhr.responseText.slice(0, 160)}`));
-        };
-        xhr.onerror = () => reject(new Error('Network error during upload'));
-        xhr.onabort = () => reject(new Error('Upload cancelled'));
-        xhr.send(file);
-      });
+      results = await uploadFileInParts(
+        file,
+        init.parts,
+        init.partSize,
+        {
+          concurrency: 4,
+          signal: controller.signal,
+          onProgress: setProgress,
+        },
+      );
     } catch (err) {
+      if ((err as DOMException)?.name === 'AbortError') {
+        abortRef.current = null;
+        return;
+      }
       setErrMsg(err instanceof Error ? err.message : 'Upload failed');
       setPhase('error');
+      abortRef.current = null;
       return;
-    } finally {
-      xhrRef.current = null;
     }
 
-    // 3) Complete — server HEADs the object and flips status to 'ready'.
+    // 3) Complete — server calls CompleteMultipartUpload (which verifies
+    //    the part ETags at the S3 layer) and flips the row to 'ready'.
     setPhase('finalizing');
     try {
       const res = await fetch(`/api/ads/${init.adId}/upload-complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ duration: fileDur }),
+        body: JSON.stringify({
+          uploadId: init.uploadId,
+          key: init.key,
+          parts: results,
+          duration: fileDur,
+        }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error ?? `upload-complete failed: ${res.status}`);
       }
       const ad = await res.json() as Ad;
+      abortRef.current = null;
       onUploaded(ad);
     } catch (err) {
+      if ((err as DOMException)?.name === 'AbortError') { abortRef.current = null; return; }
       setErrMsg(err instanceof Error ? err.message : 'Failed to finalize upload');
       setPhase('error');
+      abortRef.current = null;
     }
   }
 
   function cancelUpload() {
-    xhrRef.current?.abort();
+    abortRef.current?.abort();
+    const init = initRef.current;
+    if (init) {
+      // Best-effort tell the server — don't block the UI on it.
+      void fetch(`/api/ads/${init.adId}/upload-abort`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uploadId: init.uploadId, key: init.key }),
+      }).catch(() => undefined);
+      initRef.current = null;
+    }
+    onCancel();
   }
 
   const busy = phase === 'uploading' || phase === 'finalizing';
+  const pct = progress ? Math.round(progress.fraction * 100) : 0;
 
   return (
     <div
@@ -330,15 +367,20 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
                   {phase === 'uploading' ? 'Uploading to storage' : 'Finalizing'}
                 </p>
                 <span className="ml-auto text-[11px] text-gray-500 tabular-nums">
-                  {phase === 'uploading' ? `${Math.round(progress * 100)}%` : '—'}
+                  {phase === 'uploading' ? `${pct}%` : '—'}
                 </span>
               </div>
               <div className="h-1.5 rounded-full bg-gray-200 overflow-hidden">
                 <div
                   className="h-full bg-gray-900 transition-[width] duration-100"
-                  style={{ width: `${phase === 'finalizing' ? 100 : Math.round(progress * 100)}%` }}
+                  style={{ width: `${phase === 'finalizing' ? 100 : pct}%` }}
                 />
               </div>
+              {progress && phase === 'uploading' && (
+                <p className="mt-2 text-[10px] text-gray-400 tabular-nums">
+                  {progress.partsDone}/{progress.partsTotal} parts · {formatBytes(progress.loaded)} of {formatBytes(progress.total)}
+                </p>
+              )}
             </div>
           )}
 
