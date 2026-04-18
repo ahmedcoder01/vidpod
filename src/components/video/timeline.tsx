@@ -1,110 +1,15 @@
 'use client';
 
-import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, startTransition } from 'react';
-import { Ad, AdMarker } from '@/lib/types';
+import { useRef, useEffect, useState, useMemo, useLayoutEffect, startTransition } from 'react';
+import { TimelineProps, STRIP_H, FRAME_PAD } from './timeline-types';
+import { hms, clamp } from './timeline-utils';
+import { useAdLayout } from './use-ad-layout';
+import { useWaveformCanvas } from './use-waveform-canvas';
+import { useTimelineInteractions } from './use-timeline-interactions';
+import { AdMarkerBlock } from './timeline-ad-marker';
+import { TimelineHeader } from './timeline-header';
 
-const DEFAULT_AD_DUR = 30;
-
-type AdInfo = { thumb?: string; duration: number };
-
-type CFG = {
-  bg: string;
-  bgHi: string;
-  handle: string;
-  badgeText: string;
-  badgeBorder: string;
-  label: string;
-};
-
-const TYPE_CFG: Record<'auto' | 'static' | 'ab', CFG> = {
-  auto: {
-    bg: '#86efac',
-    bgHi: '#6ee7a8',
-    handle: '#166534',
-    badgeText: '#166534',
-    badgeBorder: '#166534',
-    label: 'A',
-  },
-  static: {
-    bg: '#93c5fd',
-    bgHi: '#7cb3fa',
-    handle: '#1e40af',
-    badgeText: '#1e40af',
-    badgeBorder: '#1e40af',
-    label: 'S',
-  },
-  ab: {
-    bg: '#fdba74',
-    bgHi: '#fca85a',
-    handle: '#9a3412',
-    badgeText: '#9a3412',
-    badgeBorder: '#9a3412',
-    label: 'A/B',
-  },
-};
-
-function hms(s: number) {
-  const safe = Math.max(0, Math.floor(s));
-  const h = Math.floor(safe / 3600);
-  const m = Math.floor((safe % 3600) / 60);
-  const ss = safe % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
-}
-
-function clamp(v: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, v));
-}
-
-// Append a rounded-rectangle sub-path to the current canvas path. Kept
-// manual (rather than `ctx.roundRect`) so the timeline stays paintable on
-// every evergreen browser without a polyfill.
-function addRoundedRectPath(
-  ctx: CanvasRenderingContext2D,
-  x: number, y: number, w: number, h: number, r: number,
-) {
-  const rr = Math.min(r, w / 2, h / 2);
-  ctx.moveTo(x + rr, y);
-  ctx.lineTo(x + w - rr, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
-  ctx.lineTo(x + w, y + h - rr);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
-  ctx.lineTo(x + rr, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
-  ctx.lineTo(x, y + rr);
-  ctx.quadraticCurveTo(x, y, x + rr, y);
-  ctx.closePath();
-}
-
-function makeAdDurationResolver(adInfo: Record<string, AdInfo>) {
-  return (m: AdMarker): number => {
-    const ids = m.adIds ?? [];
-    if (!ids.length) return DEFAULT_AD_DUR;
-    // A/B: use the longest ad so the block fits any rotation pick.
-    const durs = ids.map((id) => adInfo[id]?.duration ?? DEFAULT_AD_DUR);
-    return Math.max(...durs);
-  };
-}
-
-export interface TimelineProps {
-  duration: number;
-  currentTime: number;
-  markers: AdMarker[];
-  ads: Ad[];
-  adProgress?: { markerId: string; elapsed: number } | null;
-  error?: string | null;
-  waveformData: number[];
-  onSeek: (t: number) => void;
-  onSeekIntoAd?: (markerId: string, elapsed: number) => void;
-  onMarkerMove: (id: string, newTime: number) => void;
-  onMarkerDelete?: (id: string) => void;
-  onUndo: () => void;
-  onRedo: () => void;
-  canUndo: boolean;
-  canRedo: boolean;
-}
-
-const STRIP_H = 108;
-const FRAME_PAD = 4;
+export type { TimelineProps };
 
 export function Timeline({
   duration,
@@ -116,6 +21,7 @@ export function Timeline({
   waveformData,
   onSeek,
   onSeekIntoAd,
+  onScrubbingChange,
   onMarkerMove,
   onMarkerDelete,
   onUndo,
@@ -128,17 +34,38 @@ export function Timeline({
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [scrubbing, setScrubbing] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pendingDisplayTime, setPendingDisplayTime] = useState<number | null>(null);
+  const [visibleW, setVisibleW] = useState(900);
 
-  // Clear the selection if the selected marker was deleted from the outside
-  // (undo/redo, external edit, etc.).
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  // Synchronous companion to the `scrubbing` state — flipped inline with the
+  // mousedown handler so the pending-clear effect sees the correct value on
+  // the first `timeupdate` after drag start.
+  const scrubbingRef = useRef(false);
+  // Direct refs to the three DOM nodes that represent the playhead. Written
+  // imperatively in mousemove handlers for zero-latency cursor tracking.
+  const playheadLineRef = useRef<HTMLDivElement>(null);
+  const handleRef = useRef<HTMLDivElement>(null);
+  const playedOverlayRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const obs = new ResizeObserver(([entry]) => setVisibleW(entry.contentRect.width));
+    obs.observe(el);
+    setVisibleW(el.clientWidth);
+    return () => obs.disconnect();
+  }, []);
+
+  // Clear the selection if the selected marker was deleted externally.
   useEffect(() => {
     if (selectedId && !markers.some((m) => m.id === selectedId)) {
       setSelectedId(null);
     }
   }, [markers, selectedId]);
 
-  // Delete / Backspace while a marker is selected → remove it. Skipped when
-  // an input has focus so typing in the ad search/filter doesn't nuke ads.
+  // Delete / Backspace while a marker is selected → remove it.
   useEffect(() => {
     if (!selectedId || !onMarkerDelete) return;
     function onKey(e: KeyboardEvent) {
@@ -154,464 +81,55 @@ export function Timeline({
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedId, onMarkerDelete]);
 
-  const AD_INFO = useMemo<Record<string, AdInfo>>(
-    () => Object.fromEntries(ads.map((a) => [a.id, { thumb: a.thumbnail, duration: a.duration }])),
-    [ads],
-  );
-  const getAdDuration = useMemo(() => makeAdDurationResolver(AD_INFO), [AD_INFO]);
-
-  // Optimistic display time (where user is pointing). Overrides the derived
-  // playhead while a click/drag is in progress so seeks feel instant rather
-  // than waiting ~250ms for <video>'s timeupdate event.
-  const [pendingDisplayTime, setPendingDisplayTime] = useState<number | null>(null);
-
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const stripRef = useRef<HTMLDivElement>(null);
-  // Synchronous companion to the `scrubbing` state. Flipped inline with the
-  // mousedown handler so the pending-clear effect below sees the correct
-  // value on the very first `timeupdate` after drag start — a `useEffect`
-  // that mirrors state would still read `false` there and null the override,
-  // bouncing the playhead backwards between mousemoves.
-  const scrubbingRef = useRef(false);
-  // Direct refs to the three DOM nodes that represent the playhead. During
-  // an active drag we write their `style.left` / `style.width` imperatively
-  // in the mousemove handler, at the browser's input frame rate, instead
-  // of waiting on React's render cycle. This is the only way to get a
-  // feel that's truly pinned to the cursor on a timeline with a heavy
-  // waveform canvas + many markers.
-  const playheadLineRef = useRef<HTMLDivElement>(null);
-  const handleRef = useRef<HTMLDivElement>(null);
-  const playedOverlayRef = useRef<HTMLDivElement>(null);
-  const [visibleW, setVisibleW] = useState(900);
-
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const obs = new ResizeObserver(([entry]) => setVisibleW(entry.contentRect.width));
-    obs.observe(el);
-    setVisibleW(el.clientWidth);
-    return () => obs.disconnect();
-  }, []);
-
-  const sortedIdx = useMemo(() => {
-    return markers
-      .map((m) => ({ m, dur: getAdDuration(m) }))
-      .sort((a, b) => a.m.startTime - b.m.startTime);
-  }, [markers, getAdDuration]);
-
-  const totalAdDur = useMemo(
-    () => sortedIdx.reduce((acc, x) => acc + x.dur, 0),
-    [sortedIdx],
-  );
-
   const isLoading = duration <= 0;
-  const videoDur = Math.max(1, duration);
-  const totalDur = videoDur + totalAdDur;
 
-  // Pre-compute each ad's display-start (absolute time on the combined ruler).
-  const adLayout = useMemo(() => {
-    let acc = 0;
-    return sortedIdx.map((a) => {
-      const displayStart = a.m.startTime + acc;
-      acc += a.dur;
-      return { ...a, displayStart, displayEnd: displayStart + a.dur };
-    });
-  }, [sortedIdx]);
-
-  // Waveform segments: gaps BETWEEN ad blocks that host the pink bars.
-  const segments = useMemo(() => {
-    const segs: { videoStart: number; videoEnd: number; displayStart: number; displayEnd: number }[] = [];
-    let videoCursor = 0;
-    let displayCursor = 0;
-    for (const a of adLayout) {
-      const segEndVideo = a.m.startTime;
-      if (segEndVideo > videoCursor) {
-        const segDur = segEndVideo - videoCursor;
-        segs.push({
-          videoStart: videoCursor,
-          videoEnd: segEndVideo,
-          displayStart: displayCursor,
-          displayEnd: displayCursor + segDur,
-        });
-        displayCursor += segDur;
-      }
-      videoCursor = a.m.startTime;
-      displayCursor += a.dur;
-    }
-    if (videoCursor < videoDur) {
-      segs.push({
-        videoStart: videoCursor,
-        videoEnd: videoDur,
-        displayStart: displayCursor,
-        displayEnd: displayCursor + (videoDur - videoCursor),
-      });
-    }
-    return segs;
-  }, [adLayout, videoDur]);
-
-  // Proof-of-completion set for ad markers. An ad earns its place here
-  // the moment `adProgress` transitions away from it (session ended and
-  // the main video resumed). Used by `adOffsetAtVideoTime` below to
-  // tell a just-entered ad boundary (`currentTime` edged past the
-  // marker, parent hasn't yet flipped `adProgress`) apart from a
-  // just-exited one (same `currentTime` position but the ad has
-  // played) — the two cases are visually opposite and can't be
-  // distinguished from `currentTime` alone.
-  //
-  // Updated synchronously during render so the fresh value is visible
-  // on the same frame as the prop change; a `useEffect`-mediated state
-  // update would land one render late and create the opposite glitch
-  // (playhead jumping *back* for a frame when an ad finishes).
-  // Previous `currentTime` prop value, used both here (to detect backward
-  // seeks that should invalidate ad-completion state) and further down
-  // (for the playback-smoothing `naturalProgress` classifier).
-  const prevCurrentTimeRef = useRef(currentTime);
-
-  const completedAdsRef = useRef<Set<string>>(new Set());
-  const prevAdProgressRef = useRef(adProgress);
-  if (prevAdProgressRef.current !== adProgress) {
-    const prev = prevAdProgressRef.current;
-    const curr = adProgress;
-    let next = completedAdsRef.current;
-    // Session ended for `prev.markerId` → mark completed.
-    if (prev && (!curr || curr.markerId !== prev.markerId) && !next.has(prev.markerId)) {
-      next = new Set(next);
-      next.add(prev.markerId);
-    }
-    // Session (re)started on `curr.markerId` → wipe any prior completion
-    // so it behaves as "fresh" again (handles re-seek-into-played-ad).
-    if (curr && next.has(curr.markerId)) {
-      next = new Set(next);
-      next.delete(curr.markerId);
-    }
-    completedAdsRef.current = next;
-    prevAdProgressRef.current = adProgress;
-  }
-  // Backward seek past an ad's startTime — the user has moved before
-  // it, so completion no longer applies. Clearing here keeps the
-  // just-entered-boundary glitch protection working when they re-cross.
-  if (currentTime < prevCurrentTimeRef.current - 0.5) {
-    let next = completedAdsRef.current;
-    let changed = false;
-    for (const id of next) {
-      const a = sortedIdx.find((x) => x.m.id === id);
-      if (a && a.m.startTime >= currentTime) {
-        if (!changed) { next = new Set(next); changed = true; }
-        next.delete(id);
-      }
-    }
-    if (changed) completedAdsRef.current = next;
-  }
-
-  // video → display and display → video helpers.
-  const adOffsetAtVideoTime = useCallback(
-    (vt: number) => {
-      let off = 0;
-      for (const a of sortedIdx) {
-        if (a.m.startTime >= vt) break;
-        const isActive = adProgress?.markerId === a.m.id;
-        const isCompleted = completedAdsRef.current.has(a.m.id);
-        // If `vt` has crossed this ad's start but neither the ad is
-        // currently playing nor has it completed before, we're inside
-        // the one-frame window just before the parent flips to ad
-        // playback. Park the playhead at this marker's displayStart by
-        // NOT adding its duration to the offset — `adPlayheadTime`
-        // will take over the visual on the very next render.
-        if (!isActive && !isCompleted) break;
-        off += a.dur;
-      }
-      return off;
-    },
-    [sortedIdx, adProgress],
-  );
-
-  const displayTimeFromVideoTime = useCallback(
-    (vt: number) => vt + adOffsetAtVideoTime(vt),
-    [adOffsetAtVideoTime],
-  );
-
-  // Map a click/drag display time back to a video time. If the display time
-  // lands inside an ad block, "skip" — return the moment just past the ad's
-  // start (video resumes post-ad).
-  const videoTimeFromDisplayTime = useCallback(
-    (dt: number): { vt: number; skippedAds: AdMarker[] } => {
-      let acc = 0;
-      const skipped: AdMarker[] = [];
-      for (const a of adLayout) {
-        if (dt < a.displayStart) return { vt: dt - acc, skippedAds: skipped };
-        if (dt < a.displayEnd) {
-          // Inside ad block: jump past it.
-          skipped.push(a.m);
-          return { vt: a.m.startTime + 0.01, skippedAds: skipped };
-        }
-        skipped.push(a.m);
-        acc += a.dur;
-      }
-      return { vt: dt - acc, skippedAds: skipped };
-    },
-    [adLayout],
-  );
+  const {
+    AD_INFO,
+    getAdDuration,
+    videoDur,
+    totalDur,
+    adLayout,
+    segments,
+    displayTimeFromVideoTime,
+    videoTimeFromDisplayTime,
+    adPlayheadTime,
+    naturalProgress,
+  } = useAdLayout(markers, ads, duration, adProgress, currentTime);
 
   const innerW = Math.max(visibleW, visibleW * zoom);
   const pxPerSec = innerW / totalDur;
 
-  // ── Canvas waveform ─────────────────────────────────────────────────
-  // Replaces a per-segment <svg> tree that held hundreds of <rect>s.
-  // One <canvas> covering the whole strip means the browser paints all
-  // bars in a single fill call, and React no longer reconciles thousands
-  // of SVG children on zoom / marker / resize changes. That's what makes
-  // long videos feel responsive again.
-  const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  // Reference-equality tracker for `waveformData` so the mount-in
-  // stagger only plays when the underlying data changes (new video
-  // loaded), not every time zoom / markers shift the layout.
-  const lastWaveformDataRef = useRef<number[] | null>(null);
+  const waveformCanvasRef = useWaveformCanvas({ segments, waveformData, pxPerSec, videoDur, innerW });
 
-  useEffect(() => {
-    const cv = waveformCanvasRef.current;
-    if (!cv) return;
+  const { onStripMouseDown, startPlayheadDrag, startMarkerDrag } = useTimelineInteractions({
+    innerW,
+    totalDur,
+    videoDur,
+    adLayout,
+    onSeek,
+    onSeekIntoAd,
+    onScrubbingChange,
+    onMarkerMove,
+    getAdDuration,
+    videoTimeFromDisplayTime,
+    stripRef,
+    playheadLineRef,
+    handleRef,
+    playedOverlayRef,
+    scrubbingRef,
+    setSelectedId,
+    setDraggingId,
+    setPendingDisplayTime,
+    setScrubbing,
+  });
 
-    // HiDPI, but cap the device pixel ratio so extremely wide timelines
-    // (e.g. long video × 8× zoom) don't blow past the browser's maximum
-    // canvas surface size.
-    const MAX_PHYS_W = 8192;
-    const cssW = Math.max(1, Math.floor(innerW));
-    const cssH = STRIP_H;
-    const idealDpr = Math.min(2, window.devicePixelRatio || 1);
-    const dpr =
-      cssW * idealDpr > MAX_PHYS_W ? Math.max(1, MAX_PHYS_W / cssW) : idealDpr;
-
-    if (cv.width !== Math.floor(cssW * dpr) || cv.height !== Math.floor(cssH * dpr)) {
-      cv.width = Math.floor(cssW * dpr);
-      cv.height = Math.floor(cssH * dpr);
-    }
-    cv.style.width = `${cssW}px`;
-    cv.style.height = `${cssH}px`;
-
-    const ctx = cv.getContext('2d');
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    const srcLen = waveformData.length;
-
-    // Empty state — the shimmer overlays in JSX handle the look. Clear
-    // the canvas so a stale frame from a previous video doesn't linger.
-    if (srcLen === 0) {
-      ctx.clearRect(0, 0, cssW, cssH);
-      return;
-    }
-
-    const midY = STRIP_H / 2;
-    const halfMax = STRIP_H * 0.42;
-    const BAR_GAP = 1;
-
-    // Precompute every bar position up front so the rAF loop only does
-    // path-building + one fill per frame, not data sampling.
-    type BarPack = { x: number; w: number; halfH: number; delay: number };
-    type SegPack = { leftPx: number; widthPx: number; bars: BarPack[] };
-    const packs: SegPack[] = segments.map((seg) => {
-      const segLeftPx = seg.displayStart * pxPerSec;
-      const segWidthPx = Math.max(0, (seg.displayEnd - seg.displayStart) * pxPerSec);
-      if (segWidthPx < 2) return { leftPx: segLeftPx, widthPx: segWidthPx, bars: [] };
-
-      const totalBars = Math.max(8, Math.floor(segWidthPx / 4));
-      const srcStart = (seg.videoStart / videoDur) * srcLen;
-      const srcEnd = (seg.videoEnd / videoDur) * srcLen;
-      const barW = Math.max(1.5, (segWidthPx - BAR_GAP * (totalBars - 1)) / totalBars);
-      const bars: BarPack[] = new Array(totalBars);
-      for (let k = 0; k < totalBars; k++) {
-        const srcIdx = Math.floor(srcStart + ((k + 0.5) / totalBars) * (srcEnd - srcStart));
-        const rawAmp = waveformData[clamp(srcIdx, 0, srcLen - 1)] ?? 0;
-        const amp = Math.max(0.06, rawAmp);
-        const halfH = amp * halfMax;
-        const xCenter = ((k + 0.5) / totalBars) * segWidthPx;
-        bars[k] = { x: segLeftPx + xCenter - barW / 2, w: barW, halfH, delay: k * 0.4 };
-      }
-      return { leftPx: segLeftPx, widthPx: segWidthPx, bars };
-    });
-
-    // Only restage the intro animation when waveformData *itself* changes
-    // (new video loaded). Zoom / pan / marker edits paint the final state
-    // immediately — matches the old behavior where React reused existing
-    // <rect>s and didn't re-fire the CSS keyframes.
-    const doStagger = lastWaveformDataRef.current !== waveformData;
-    lastWaveformDataRef.current = waveformData;
-
-    const RISE_MS = 380;
-    const mountedAt = performance.now();
-    let rafId = 0;
-
-    // Matches the original cubic-bezier(0.25, 0.9, 0.3, 1) closely enough
-    // for the human eye; the intro is <200ms so a cheap ease-out is fine.
-    const easeOut = (t: number) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
-
-    const drawFrame = (progressMs: number | null): boolean => {
-      ctx.clearRect(0, 0, cssW, cssH);
-
-      ctx.fillStyle = '#f0abfc';
-      for (const p of packs) {
-        if (p.widthPx <= 0) continue;
-        ctx.fillRect(p.leftPx, 0, p.widthPx, STRIP_H);
-      }
-
-      // All bars batched into one path → a single fill call for the whole
-      // strip, regardless of bar count. This is the hot path during the
-      // intro animation.
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.82)';
-      ctx.beginPath();
-      let allDone = true;
-      for (const p of packs) {
-        for (const b of p.bars) {
-          let s: number;
-          if (progressMs == null) {
-            s = 1;
-          } else {
-            s = easeOut((progressMs - b.delay) / RISE_MS);
-            if (s < 1) allDone = false;
-          }
-          const halfH = b.halfH * s;
-          if (halfH < 0.25) continue;
-          const r = Math.min(b.w / 2, 1.2);
-          addRoundedRectPath(ctx, b.x, midY - halfH, b.w, halfH * 2, r);
-        }
-      }
-      ctx.fill();
-      return allDone;
-    };
-
-    if (doStagger) {
-      const tick = () => {
-        const done = drawFrame(performance.now() - mountedAt);
-        if (!done) rafId = requestAnimationFrame(tick);
-      };
-      rafId = requestAnimationFrame(tick);
-    } else {
-      drawFrame(null);
-    }
-
-    return () => {
-      if (rafId) cancelAnimationFrame(rafId);
-    };
-  }, [segments, waveformData, pxPerSec, videoDur, innerW]);
-
-  const derivedDisplayTime = displayTimeFromVideoTime(currentTime);
-
-  // While an ad is playing the main video is paused, so derivedDisplayTime
-  // is frozen at the ad's displayStart. Drive the playhead from the ad's own
-  // elapsed time so it slides smoothly through the ad block instead.
-  const adPlayheadTime = useMemo(() => {
-    if (!adProgress) return null;
-    const slot = adLayout.find((a) => a.m.id === adProgress.markerId);
-    if (!slot) return null;
-    return slot.displayStart + Math.min(slot.dur, adProgress.elapsed);
-  }, [adProgress, adLayout]);
-
-  const playheadDisplayTime =
-    pendingDisplayTime ?? adPlayheadTime ?? derivedDisplayTime;
-  const playheadPx = playheadDisplayTime * pxPerSec;
-
-  // Classify the latest `currentTime` delta: a small forward step is natural
-  // playback progress (smooth it), anything else is a seek / reverse jump
-  // (snap so the user sees instant feedback). Shares `prevCurrentTimeRef`
-  // with the ad-completion guard above; the ref is updated in the effect
-  // below so both readers see the same pre-render value.
-  const naturalProgress =
-    currentTime - prevCurrentTimeRef.current >= 0 &&
-    currentTime - prevCurrentTimeRef.current <= 1.0;
-  useEffect(() => {
-    prevCurrentTimeRef.current = currentTime;
-  }, [currentTime]);
-
-  // CSS-transition smoothing of the playhead between ~4 Hz `timeupdate`
-  // events. 0.25s linear matches Chrome/FF's native tick cadence so each
-  // transition finishes just as the next one starts — the playhead reads
-  // as continuous motion instead of stepwise jumps.
-  //
-  // Linear, not ease-*: anything non-linear accelerates/decelerates between
-  // every tick and the playhead visibly wobbles. Real playback is constant
-  // velocity, so the animation should be too.
-  //
-  // Snap (no transition) when:
-  //   • scrubbing — drags and mouse-down-to-seek must feel instant,
-  //   • optimistic `pendingDisplayTime` — a single click already jumped the
-  //     head to the cursor; no glide across the strip back to the new time,
-  //   • the currentTime delta isn't a natural forward tick (programmatic
-  //     seek, keyboard seek, reverse jump, cross-fade).
-  const smoothPlayhead =
-    !scrubbing &&
-    pendingDisplayTime == null &&
-    (adProgress != null || naturalProgress);
-  const playheadTransition = smoothPlayhead ? 'left 0.25s linear' : 'none';
-  // The played-region overlay animates `width`, not `left`, so it needs its
-  // own declaration — sharing `playheadTransition` would silently drop the
-  // animation on this element (only `left` was whitelisted).
-  const playedOverlayTransition = smoothPlayhead ? 'width 0.25s linear' : 'none';
-
-  // Whenever the video actually reports a new currentTime, clear the pending
-  // optimistic override so the displayed playhead tracks real playback —
-  // UNLESS a drag is still in flight. During a scrub the video's timeupdate
-  // lags the cursor by 100–250 ms; nulling the override here would yank the
-  // playhead to the stale position between every mousemove, which reads as
-  // the playhead "drifting" behind the cursor. The ref is flipped inline
-  // with the mouse handlers so this effect sees it on the first tick.
-  useEffect(() => {
-    if (!scrubbingRef.current) setPendingDisplayTime(null);
-  }, [currentTime]);
-
-  // Convert a viewport-space `clientX` into a logical-pixel offset inside
-  // the timeline strip. Essential when a CSS `zoom` is applied to any
-  // ancestor (e.g. `html { zoom: 1.1 }` on this app): `clientX` and
-  // `getBoundingClientRect()` live in visual (post-zoom) space, while
-  // `clientWidth` and anything we assign to `style.left` live in logical
-  // (pre-zoom) space. Without compensating for the ratio the playhead
-  // drifts by the zoom factor and the gap grows with cursor position.
-  const stripOffsetFromClientX = useCallback(
-    (clientX: number): number | null => {
-      const el = stripRef.current;
-      if (!el) return null;
-      const rect = el.getBoundingClientRect();
-      const scale = el.clientWidth > 0 ? rect.width / el.clientWidth : 1;
-      return clamp((clientX - rect.left) / (scale || 1), 0, innerW);
-    },
-    [innerW],
-  );
-
-  // Paint the three playhead DOM nodes imperatively for zero-latency cursor
-  // tracking. Also zeroes out `transition` on each element first — if the
-  // previous render left `left 0.25s linear` in place (natural playback
-  // smoothing) and a drag begins before React commits the scrubbing state,
-  // the browser would *animate* our imperative write and the playhead
-  // would visibly glide behind the cursor. Clearing `transition` inline
-  // guarantees a snap. The next React render overwrites these inline
-  // styles from JSX, so no cleanup is needed on mouseup.
-  const paintPlayheadAt = useCallback((x: number) => {
-    const line = playheadLineRef.current;
-    const handle = handleRef.current;
-    const overlay = playedOverlayRef.current;
-    if (line) {
-      line.style.transition = 'none';
-      line.style.left = `${x}px`;
-    }
-    if (handle) {
-      handle.style.transition = 'none';
-      handle.style.left = `${x + FRAME_PAD}px`;
-    }
-    if (overlay) {
-      overlay.style.transition = 'none';
-      overlay.style.width = `${Math.max(0, x)}px`;
-    }
-  }, []);
-
-  // ── Ticks ──────────────────────────────────────────────────────────────
+  // ── Ruler ticks ────────────────────────────────────────────────────────────
   const { majorStep, minorStep } = useMemo(() => {
     const candidates = [10, 15, 30, 60, 120, 300, 600];
     const minLabelPx = 85;
     let major = 60;
     for (const c of candidates) {
-      if (c * pxPerSec >= minLabelPx) {
-        major = c;
-        break;
-      }
+      if (c * pxPerSec >= minLabelPx) { major = c; break; }
       major = c;
     }
     const minor = major / (major >= 60 ? 4 : 2);
@@ -619,8 +137,7 @@ export function Timeline({
   }, [pxPerSec]);
 
   // Generate ticks strictly *inside* [0, totalDur). The endpoint tick would
-  // sit at left=innerW and its centered label would extrude past the right
-  // edge, causing the scroll container to show a phantom horizontal overflow.
+  // sit at left=innerW and its label would extrude past the right edge.
   const majorTicks = useMemo(() => {
     const r: number[] = [];
     for (let t = 0; t < totalDur - 0.001; t += majorStep) r.push(t);
@@ -635,97 +152,33 @@ export function Timeline({
     return r;
   }, [totalDur, minorStep, majorStep]);
 
-  // ── Interactions ───────────────────────────────────────────────────────
-  // Core: map a logical strip offset to a display-time, route the seek
-  // (into an ad block or onto the main video), and update pending. Pure
-  // state + callback work — no DOM writes. The visual update is handled
-  // separately by `paintPlayheadAt` so it can run at input-frame rate.
-  function applySeekAtX(x: number) {
-    const dt = (x / innerW) * totalDur;
-    setPendingDisplayTime(dt);
+  // ── Playhead time ──────────────────────────────────────────────────────────
+  const derivedDisplayTime = displayTimeFromVideoTime(currentTime);
+  const playheadDisplayTime = pendingDisplayTime ?? adPlayheadTime ?? derivedDisplayTime;
+  const playheadPx = playheadDisplayTime * pxPerSec;
 
-    const inAd = adLayout.find((a) => dt >= a.displayStart && dt < a.displayEnd);
-    if (inAd && onSeekIntoAd) {
-      const elapsed = Math.max(0, Math.min(inAd.dur, dt - inAd.displayStart));
-      onSeekIntoAd(inAd.m.id, elapsed);
-      return;
-    }
-    const { vt } = videoTimeFromDisplayTime(dt);
-    onSeek(clamp(vt, 0, videoDur));
-  }
+  // CSS-transition smoothing between ~4 Hz `timeupdate` events.
+  // Snap (no transition) when scrubbing, optimistic override is active,
+  // or the delta isn't a natural forward tick (seek, reverse, cross-fade).
+  const smoothPlayhead =
+    !scrubbing &&
+    pendingDisplayTime == null &&
+    (adProgress != null || naturalProgress);
+  const playheadTransition = smoothPlayhead ? 'left 0.25s linear' : 'none';
+  const playedOverlayTransition = smoothPlayhead ? 'width 0.25s linear' : 'none';
 
-  // Shared drag entry for strip clicks and direct handle grabs. Paints
-  // the playhead synchronously with each mousemove event for a
-  // cursor-attached feel independent of React's render cadence.
-  function beginScrub(firstClientX: number) {
-    scrubbingRef.current = true;
-    setScrubbing(true);
-    const handleAt = (clientX: number) => {
-      const x = stripOffsetFromClientX(clientX);
-      if (x == null) return;
-      paintPlayheadAt(x);   // visual (imperative, no transition)
-      applySeekAtX(x);      // state + video seek
-    };
-    handleAt(firstClientX);
-    const onMove = (ev: MouseEvent) => handleAt(ev.clientX);
-    const onUp = () => {
-      scrubbingRef.current = false;
-      setScrubbing(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }
+  // Clear the optimistic override once the video reports back — but only
+  // when no drag is in flight, otherwise we yank the playhead to the stale
+  // timeupdate position between every mousemove.
+  useEffect(() => {
+    if (!scrubbingRef.current) setPendingDisplayTime(null);
+  }, [currentTime]);
 
-  function onStripMouseDown(e: React.MouseEvent) {
-    if ((e.target as HTMLElement).closest('[data-marker]')) return;
-    // Clicking empty strip deselects any focused ad.
-    setSelectedId(null);
-    e.preventDefault();
-    beginScrub(e.clientX);
-  }
-
-  function startPlayheadDrag(e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    beginScrub(e.clientX);
-  }
-
-  function startMarkerDrag(e: React.MouseEvent, m: AdMarker) {
-    e.preventDefault();
-    e.stopPropagation();
-    setSelectedId(m.id);
-    setDraggingId(m.id);
-    const startX = e.clientX;
-    const startTime = m.startTime;
-    const adDur = getAdDuration(m);
-
-    const onMove = (ev: MouseEvent) => {
-      const dx = ev.clientX - startX;
-      const dt = (dx / innerW) * totalDur;
-      const newTime = clamp(startTime + dt, 0, Math.max(0, videoDur - adDur));
-      onMarkerMove(m.id, newTime);
-    };
-    const onUp = () => {
-      setDraggingId(null);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }
-
-  // Zoom updates are interruptible — React can defer the heavy waveform
-  // re-layout so the slider thumb / button click stays responsive.
+  // ── Zoom ───────────────────────────────────────────────────────────────────
   const bumpZoom = (delta: number) =>
-    startTransition(() =>
-      setZoom((z) => clamp(+(z + delta).toFixed(2), 1, 8)),
-    );
+    startTransition(() => setZoom((z) => clamp(+(z + delta).toFixed(2), 1, 8)));
 
-  // Wheel handling on the strip: Ctrl/⌘+wheel zooms (anchored at cursor),
-  // plain wheel scrolls horizontally. Always preventDefault so the page
-  // behind the timeline doesn't scroll/zoom at the same time.
+  // Ctrl/⌘+wheel zooms (anchored at cursor); plain wheel scrolls horizontally.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -735,7 +188,6 @@ export function Timeline({
       ev.stopPropagation();
 
       if (ev.ctrlKey || ev.metaKey) {
-        // Zoom around the cursor's current display-time anchor.
         const rect = el.getBoundingClientRect();
         const cursorXInScroll = ev.clientX - rect.left + el.scrollLeft;
         const anchorFraction = cursorXInScroll / innerW;
@@ -746,8 +198,6 @@ export function Timeline({
         );
         if (next === zoom) return;
         startTransition(() => setZoom(next));
-        // After the zoom applies, re-anchor so the cursor stays over the
-        // same display-time point.
         requestAnimationFrame(() => {
           const nextInnerW = Math.max(visibleW, visibleW * next);
           el.scrollLeft = anchorFraction * nextInnerW - (ev.clientX - rect.left);
@@ -755,7 +205,6 @@ export function Timeline({
         return;
       }
 
-      // Horizontal scroll — support both trackpad (deltaX) and wheel (deltaY).
       const delta = Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY;
       el.scrollLeft += delta;
     };
@@ -774,88 +223,21 @@ export function Timeline({
     }
   }, [playheadPx, scrubbing]);
 
-  // ── Render ─────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_16px_rgba(0,0,0,0.04)] overflow-hidden">
-      {/* Header */}
-      <div className="grid grid-cols-3 items-center px-5 py-3.5">
-        <div className="flex items-center gap-5">
-          <button
-            onClick={onUndo}
-            disabled={!canUndo}
-            title="Undo (⌘Z)"
-            className="flex items-center gap-2 text-[13px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
-          >
-            <span className="w-7 h-7 rounded-full border border-gray-300 flex items-center justify-center bg-white hover:border-gray-400 transition">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 7v6h6" />
-                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
-              </svg>
-            </span>
-            <span className="font-medium">Undo</span>
-          </button>
-          <button
-            onClick={onRedo}
-            disabled={!canRedo}
-            title="Redo (⌘⇧Z)"
-            className="flex items-center gap-2 text-[13px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
-          >
-            <span className="w-7 h-7 rounded-full border border-gray-300 flex items-center justify-center bg-white hover:border-gray-400 transition">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 7v6h-6" />
-                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
-              </svg>
-            </span>
-            <span className="font-medium">Redo</span>
-          </button>
-        </div>
+      <TimelineHeader
+        isLoading={isLoading}
+        playheadDisplayTime={playheadDisplayTime}
+        zoom={zoom}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={onUndo}
+        onRedo={onRedo}
+        onZoomChange={setZoom}
+        bumpZoom={bumpZoom}
+      />
 
-        <div className="flex justify-center">
-          <div className="font-mono text-[13px] text-gray-900 border border-gray-200 rounded-lg px-5 py-1.5 tabular-nums tracking-wider bg-white select-none min-w-[124px] text-center">
-            {isLoading ? '--:--:--' : hms(playheadDisplayTime)}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3 justify-end">
-          <button
-            onClick={() => bumpZoom(-0.5)}
-            className="text-gray-500 hover:text-gray-900 transition active:scale-90"
-            aria-label="Zoom out"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <circle cx="11" cy="11" r="7.5" />
-              <line x1="7.5" y1="11" x2="14.5" y2="11" />
-              <line x1="17" y1="17" x2="21" y2="21" />
-            </svg>
-          </button>
-          <input
-            type="range"
-            min={1}
-            max={8}
-            step={0.1}
-            value={zoom}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              startTransition(() => setZoom(v));
-            }}
-            className="timeline-zoom w-36 cursor-pointer"
-          />
-          <button
-            onClick={() => bumpZoom(0.5)}
-            className="text-gray-500 hover:text-gray-900 transition active:scale-90"
-            aria-label="Zoom in"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <circle cx="11" cy="11" r="7.5" />
-              <line x1="11" y1="7.5" x2="11" y2="14.5" />
-              <line x1="7.5" y1="11" x2="14.5" y2="11" />
-              <line x1="17" y1="17" x2="21" y2="21" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      {/* Body */}
       <div className="px-4 pb-3">
         <div
           ref={scrollRef}
@@ -866,10 +248,7 @@ export function Timeline({
             {/* Dark frame wrapper */}
             <div
               className="relative rounded-[8px]"
-              style={{
-                background: '#0a0a0a',
-                padding: FRAME_PAD,
-              }}
+              style={{ background: '#0a0a0a', padding: FRAME_PAD }}
             >
               {/* Inner strip */}
               <div
@@ -882,18 +261,13 @@ export function Timeline({
                 }}
                 onMouseDown={isLoading ? undefined : onStripMouseDown}
               >
-                {/* Waveform — drawn to a single <canvas> (see the effect
-                    wiring `waveformCanvasRef` above). Independent of
-                    currentTime/playhead, so timeupdate ticks never trigger
-                    a repaint of the bars; the played-region overlay below
-                    handles the brightness split. */}
+                {/* Waveform canvas */}
                 <canvas
                   ref={waveformCanvasRef}
                   className="absolute inset-0 pointer-events-none"
                 />
-                {/* Empty-state shimmer. Only rendered before waveformData
-                    arrives from the backend; once it's in, the canvas
-                    takes over and these divs unmount. */}
+
+                {/* Empty-state shimmer — only until waveformData arrives */}
                 {waveformData.length === 0 && segments.map((seg, i) => (
                   <div
                     key={`sh-${i}`}
@@ -901,17 +275,13 @@ export function Timeline({
                     style={{
                       left: seg.displayStart * pxPerSec,
                       width: (seg.displayEnd - seg.displayStart) * pxPerSec,
-                      background:
-                        'linear-gradient(180deg, #f0abfc 0%, #e879f9 50%, #f0abfc 100%)',
+                      background: 'linear-gradient(180deg, #f0abfc 0%, #e879f9 50%, #f0abfc 100%)',
                       pointerEvents: 'none',
                     }}
                   />
                 ))}
 
-                {/* Played-region overlay. One element; its width is the only
-                    thing that updates on timeupdate. The low-alpha white
-                    bump makes bars to the left of the playhead read slightly
-                    brighter, matching the old per-bar opacity split. */}
+                {/* Played-region overlay — width-only update on timeupdate */}
                 {!isLoading && (
                   <div
                     ref={playedOverlayRef}
@@ -927,142 +297,23 @@ export function Timeline({
                   />
                 )}
 
-                {/* Ad markers — fill their slots completely (no floating) */}
-                {adLayout.map((a) => {
-                  const cfg = TYPE_CFG[a.m.type];
-                  const rawLeft = a.displayStart * pxPerSec;
-                  const rawWidth = a.dur * pxPerSec;
-                  // Gap between ad block and the clip it splits. Scale it with
-                  // the slot width so tight (zoomed-out) slots don't overflow
-                  // into the neighboring waveform.
-                  const gap = Math.min(3, Math.max(0, (rawWidth - 4) / 2));
-                  const leftPx = rawLeft + gap;
-                  const widthPx = Math.max(3, rawWidth - gap * 2);
-                  const isHov = hoveredId === a.m.id;
-                  const isDrag = draggingId === a.m.id;
-                  const isSel = selectedId === a.m.id;
-                  const thumbId = a.m.adIds?.[0];
-                  const thumb = thumbId ? AD_INFO[thumbId]?.thumb : undefined;
-                  const narrow = widthPx < 60;
-                  const outline = isDrag
-                    ? '2px solid rgba(255,255,255,0.85)'
-                    : isSel
-                    ? '2px solid #ffffff'
-                    : 'none';
+                {/* Ad marker blocks */}
+                {adLayout.map((a) => (
+                  <AdMarkerBlock
+                    key={a.m.id}
+                    a={a}
+                    pxPerSec={pxPerSec}
+                    AD_INFO={AD_INFO}
+                    hoveredId={hoveredId}
+                    draggingId={draggingId}
+                    selectedId={selectedId}
+                    onMouseDown={startMarkerDrag}
+                    onMouseEnter={setHoveredId}
+                    onMouseLeave={() => setHoveredId(null)}
+                  />
+                ))}
 
-                  return (
-                    <div
-                      key={a.m.id}
-                      data-marker
-                      onMouseDown={(e) => startMarkerDrag(e, a.m)}
-                      onMouseEnter={() => setHoveredId(a.m.id)}
-                      onMouseLeave={() => setHoveredId(null)}
-                      className="absolute select-none ad-marker-in"
-                      style={{
-                        left: leftPx,
-                        top: 2,
-                        bottom: 2,
-                        width: widthPx,
-                        background: isHov || isDrag || isSel ? cfg.bgHi : cfg.bg,
-                        cursor: isDrag ? 'grabbing' : 'grab',
-                        zIndex: isDrag ? 30 : isSel ? 25 : isHov ? 20 : 15,
-                        borderRadius: 3,
-                        outline,
-                        outlineOffset: -2,
-                        boxShadow: isSel
-                          ? '0 4px 14px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.08)'
-                          : 'none',
-                        transition:
-                          'background 0.12s ease, outline-color 0.15s ease, transform 0.12s ease, box-shadow 0.18s ease',
-                        transform: (isHov && !isDrag) || isSel ? 'translateY(-0.5px)' : 'translateY(0)',
-                      }}
-                    >
-                      <div
-                        className="absolute top-1.5 left-1.5 flex items-center justify-center font-bold select-none pointer-events-none"
-                        style={{
-                          background: '#ffffff',
-                          color: cfg.badgeText,
-                          border: `1px solid ${cfg.badgeBorder}`,
-                          fontSize: 10,
-                          minWidth: a.m.type === 'ab' ? 26 : 18,
-                          height: 16,
-                          padding: '0 4px',
-                          borderRadius: 4,
-                          letterSpacing: '0.04em',
-                          lineHeight: 1,
-                        }}
-                      >
-                        {cfg.label}
-                      </div>
-
-                      {a.m.type === 'static' && thumb && !narrow && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none px-1">
-                          <img
-                            src={thumb}
-                            alt=""
-                            draggable={false}
-                            className="object-cover rounded-md shadow-md"
-                            style={{
-                              maxWidth: 'calc(100% - 6px)',
-                              maxHeight: 58,
-                              opacity: isHov || isDrag ? 1 : 0.94,
-                              transition: 'opacity 0.15s',
-                            }}
-                          />
-                        </div>
-                      )}
-
-                      <div
-                        className="absolute bottom-1.5 left-1/2 -translate-x-1/2 pointer-events-none"
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(3, 3px)',
-                          gridTemplateRows: 'repeat(2, 3px)',
-                          gap: 2.5,
-                        }}
-                      >
-                        {Array.from({ length: 6 }).map((_, k) => (
-                          <div
-                            key={k}
-                            style={{
-                              width: 3,
-                              height: 3,
-                              borderRadius: 999,
-                              background: cfg.handle,
-                              opacity: isHov || isDrag ? 1 : 0.85,
-                              transition: 'opacity 0.15s',
-                            }}
-                          />
-                        ))}
-                      </div>
-
-                      {/* Floating delete button — appears on selection */}
-                      {/* {isSel && onMarkerDelete && (
-                        <button
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onMarkerDelete(a.m.id);
-                            setSelectedId(null);
-                          }}
-                          title="Delete ad (Del)"
-                          aria-label="Delete ad"
-                          className="absolute -top-2.5 -right-2.5 w-5 h-5 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center transition active:scale-90 delete-pop"
-                          style={{
-                            boxShadow:
-                              '0 4px 12px rgba(239,68,68,0.5), 0 1px 3px rgba(0,0,0,0.25), 0 0 0 2px #0a0a0a',
-                          }}
-                        >
-                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-                            <line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/>
-                          </svg>
-                        </button>
-                      )} */}
-                    </div>
-                  );
-                })}
-
-                {/* Playhead line — snaps on click, slides during ad playback */}
+                {/* Playhead line */}
                 {!isLoading && (
                   <div
                     ref={playheadLineRef}
@@ -1085,8 +336,7 @@ export function Timeline({
                   </div>
                 )}
 
-                {/* Loading / error overlay — shown until <video> reports its
-                    real duration, or surfaces an error if the URL is dead. */}
+                {/* Loading / error overlay */}
                 {isLoading && (
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50 px-6">
                     {error ? (
@@ -1162,10 +412,7 @@ export function Timeline({
                 />
               ))}
               {majorTicks.map((t, i) => {
-                // Keep edge labels inside innerW so they never push the scroll
-                // container past its natural width.
-                const labelAlign =
-                  i === 0 ? 'translateX(0)' : 'translateX(-50%)';
+                const labelAlign = i === 0 ? 'translateX(0)' : 'translateX(-50%)';
                 return (
                   <div
                     key={`ma-${t}`}

@@ -346,6 +346,12 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
   function handleSeekIntoAd(markerId: string, elapsed: number) {
     playerRef.current?.seekIntoAd(markerId, elapsed);
   }
+  // Pause the underlying video(s) while the playhead is being dragged
+  // so playback doesn't march on under the cursor during a long hold;
+  // resume on release if it was playing before.
+  function handleScrubbingChange(active: boolean) {
+    playerRef.current?.setScrubbing(active);
+  }
 
   // Loading / error guards.
   if (loadError) {
@@ -552,6 +558,7 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
           waveformData={video.waveformData}
           onSeek={handleSeek}
           onSeekIntoAd={handleSeekIntoAd}
+          onScrubbingChange={handleScrubbingChange}
           onMarkerDelete={deleteMarker}
           onMarkerMove={moveMarker}
           onUndo={undo}

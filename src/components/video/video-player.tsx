@@ -13,6 +13,12 @@ export interface VideoPlayerHandle {
   seekIntoAd: (markerId: string, elapsed: number) => void;
   play: () => void;
   pause: () => void;
+  // Called by the timeline when the user grabs/releases the playhead. On
+  // `true` we remember which video (main or ad) was playing and pause
+  // both so a long hold doesn't let playback drift out from under the
+  // cursor. On `false` we resume whichever video is now the foreground
+  // (may differ if the user released inside an ad block).
+  setScrubbing: (active: boolean) => void;
 }
 
 interface Props {
@@ -43,6 +49,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   const dragging = useRef(false);
   const hitMarkers = useRef<Set<string>>(new Set());
   const wasPlayingBeforeAd = useRef(false);
+  // Whether *any* video (main or ad) was playing at the moment a scrub
+  // began. Restored on release so "I was watching → grabbed the
+  // playhead → dropped it somewhere new" keeps playing at the new
+  // position, while "I was paused → scrubbed → dropped" stays paused.
+  const wasPlayingBeforeScrub = useRef(false);
   // When non-null, the ad-session effect reads this to pick a starting
   // elapsed time + whether to auto-play. Cleared after consumption.
   const pendingAdStart = useRef<{ elapsed: number; autoPlay: boolean } | null>(null);
@@ -153,6 +164,30 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     },
     play: () => { videoRef.current?.play().catch(() => {}); },
     pause: () => videoRef.current?.pause(),
+    setScrubbing: (active: boolean) => {
+      const v = videoRef.current;
+      const adV = adVideoRef.current;
+      if (active) {
+        // Snapshot the current playback state across both videos, then
+        // pause anything that was running. Uses OR so the scrub-end
+        // handler resumes as long as *something* was playing, without
+        // caring which one — the foreground may have changed mid-scrub.
+        const mainPlaying = !!v && !v.paused;
+        const adPlaying = !!adV && !adV.paused;
+        wasPlayingBeforeScrub.current = mainPlaying || adPlaying;
+        if (mainPlaying) v!.pause();
+        if (adPlaying) adV!.pause();
+      } else {
+        if (wasPlayingBeforeScrub.current) {
+          // Resume the video that's currently foreground. If the user
+          // released inside an ad block, `adSession` will be set and
+          // the ad video is the one to play; otherwise the main one.
+          if (adSessionRef.current && adV) adV.play().catch(() => {});
+          else if (v) v.play().catch(() => {});
+        }
+        wasPlayingBeforeScrub.current = false;
+      }
+    },
   }));
 
   // Main-video event wiring + ad trigger detection.
