@@ -69,6 +69,44 @@ export interface Transcript {
   words: TranscriptWord[];
 }
 
+// ── DTOs shared between API routes, the dashboard, ads editor, and watch page.
+// `VideoListDto` mirrors /api/videos (lightweight row) and `VideoDetailDto`
+// mirrors /api/videos/[id] (full payload used by editor + player).
+export interface VideoListDto {
+  id: string;
+  title: string;
+  description: string;
+  author: string;
+  status: string;
+  episode: string | null;
+  duration: number;
+  thumbnail: string | null;
+  chunksURL: string | null;
+  createdAt: string;
+  publishedAt: string | null;
+  adMarkerCount: number;
+}
+
+export interface VideoDetailDto {
+  id: string;
+  title: string;
+  description: string;
+  author: string;
+  episode: string | null;
+  status: string;
+  duration: number;
+  thumbnail: string | null;
+  fullS3Url: string | null;
+  chunksURL: string | null;
+  playbackUrl: string | null;
+  waveformData: number[];
+  transcript: Transcript | null;
+  adMarkers: AdMarker[];
+  createdAt: string;
+  publishedAt: string | null;
+  podcastId: string;
+}
+
 // ── Podcast show (a feed/channel) that contains many episodes (Video/Podcast).
 // Distinct from the legacy `Podcast` interface above which represents an
 // episode in the current mocked UI. Will map to the `Podcast` Prisma model

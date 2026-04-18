@@ -397,10 +397,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
             />
             {/* Top-left label */}
             <div className="absolute top-3 left-3 flex items-center gap-2 pointer-events-none">
-              <div className="bg-white/10 border border-white/20 backdrop-blur-sm rounded-md px-2.5 py-1 text-[10px] text-white uppercase tracking-widest font-semibold">
+              <div className="bg-white/10 border border-white/20 backdrop-blur-sm rounded-md px-2.5 py-1 text-[11px] text-white uppercase tracking-widest font-semibold">
                 Advertisement
               </div>
-              <div className="text-white/70 text-xs font-medium truncate max-w-[200px]">
+              <div className="text-white/70 text-[13px] font-medium truncate max-w-[200px]">
                 {adSession.ad.title}
               </div>
             </div>
@@ -415,7 +415,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
                   <SkipForward size={12} />
                 </button>
               ) : (
-                <div className="bg-white/10 border border-white/20 backdrop-blur-sm text-white/80 text-[11px] font-medium rounded-md px-3 py-1.5 select-none">
+                <div className="bg-white/10 border border-white/20 backdrop-blur-sm text-white/80 text-xs font-medium rounded-md px-3 py-1.5 select-none">
                   Skip in {Math.max(0, Math.ceil(adCanSkipAt - adElapsed))}s
                 </div>
               )}
@@ -463,7 +463,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           onClick={() => { if (!adSession && videoRef.current) videoRef.current.currentTime = 0; }}
           disabled={!!adSession}
           title="Jump to start"
-          className="flex items-center gap-1.5 text-[12px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
+          className="flex items-center gap-1.5 text-[13px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
         >
           <span className="w-6 h-6 rounded-full border border-gray-300 flex items-center justify-center bg-white hover:border-gray-400 transition">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -479,7 +479,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
             onClick={() => seekBy(-10)}
             disabled={!!adSession}
             title="Back 10 seconds"
-            className="flex items-center gap-1 text-[12px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
+            className="flex items-center gap-1 text-[13px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="1 4 1 10 7 10" />
@@ -530,7 +530,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
             onClick={() => seekBy(10)}
             disabled={!!adSession}
             title="Forward 10 seconds"
-            className="flex items-center gap-1 text-[12px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
+            className="flex items-center gap-1 text-[13px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
           >
             <span className="font-medium tabular-nums">10s</span>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -544,7 +544,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           onClick={() => { if (!adSession) { const v = videoRef.current; if (v) v.currentTime = v.duration; } }}
           disabled={!!adSession}
           title="Jump to end"
-          className="flex items-center gap-1.5 text-[12px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
+          className="flex items-center gap-1.5 text-[13px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
         >
           <span className="font-medium hidden sm:inline">Jump to end</span>
           <span className="w-6 h-6 rounded-full border border-gray-300 flex items-center justify-center bg-white hover:border-gray-400 transition">

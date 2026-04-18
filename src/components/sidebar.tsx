@@ -103,7 +103,7 @@ function PodcastDropdown() {
         {currentPodcast ? (
           <>
             <PodcastBadge show={currentPodcast} />
-            <span className="text-gray-700 text-[11px] font-medium truncate flex-1">
+            <span className="text-gray-700 text-[13px] font-medium truncate flex-1">
               {currentPodcast.title}
             </span>
           </>
@@ -112,14 +112,14 @@ function PodcastDropdown() {
             <div className="w-5 h-5 rounded-md bg-gray-100 shrink-0 flex items-center justify-center">
               <Loader2 size={10} className="text-gray-400 animate-spin" />
             </div>
-            <span className="text-gray-400 text-[11px] font-medium truncate flex-1">
+            <span className="text-gray-400 text-[13px] font-medium truncate flex-1">
               Loading…
             </span>
           </>
         ) : (
           <>
             <div className="w-5 h-5 rounded-md bg-gray-200 shrink-0" />
-            <span className="text-gray-400 text-[11px] font-medium truncate flex-1">
+            <span className="text-gray-400 text-[13px] font-medium truncate flex-1">
               No podcasts yet
             </span>
           </>
@@ -141,7 +141,7 @@ function PodcastDropdown() {
         >
           <div className="max-h-72 overflow-y-auto py-1">
             {podcasts.length === 0 ? (
-              <div className="px-3 py-4 text-[11px] text-gray-400 text-center">
+              <div className="px-3 py-4 text-xs text-gray-400 text-center">
                 No podcasts yet
               </div>
             ) : (
@@ -161,13 +161,13 @@ function PodcastDropdown() {
                     <PodcastBadge show={p} size={22} />
                     <div className="flex-1 min-w-0">
                       <p className={cn(
-                        'text-[11px] truncate',
+                        'text-[13px] truncate',
                         active ? 'text-indigo-700 font-semibold' : 'text-gray-800 font-medium',
                       )}>
                         {p.title}
                       </p>
                       {p.description && (
-                        <p className="text-[10px] text-gray-400 truncate mt-0.5">
+                        <p className="text-[11px] text-gray-400 truncate mt-0.5">
                           {p.description}
                         </p>
                       )}
@@ -179,7 +179,7 @@ function PodcastDropdown() {
             )}
           </div>
           <button
-            className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50 border-t border-gray-100 transition"
+            className="w-full flex items-center gap-2 px-3 py-2 text-[13px] font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50 border-t border-gray-100 transition"
             onClick={() => { setOpen(false); setShowCreate(true); }}
           >
             <Plus size={12} className="text-gray-400" />
@@ -225,7 +225,7 @@ export function Sidebar() {
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
             <path d="M10 2L18 16H2L10 2Z" fill="#111827" />
           </svg>
-          <span className="text-gray-900 font-semibold text-[15px] tracking-tight">Vidpod</span>
+          <span className="text-gray-900 font-semibold text-base tracking-tight">Vidpod</span>
         </div>
       </div>
 
@@ -238,7 +238,7 @@ export function Sidebar() {
           onClick={handleCreateEpisode}
           disabled={!canUpload}
           title={canUpload ? 'Create an episode' : 'Select a podcast first'}
-          className="w-full bg-gray-900 hover:bg-gray-800 text-white text-[11px] font-medium rounded-lg py-2 px-3 transition flex items-center justify-center gap-1 disabled:bg-gray-300 disabled:cursor-not-allowed"
+          className="w-full bg-gray-900 hover:bg-gray-800 text-white text-[13px] font-medium rounded-lg py-2 px-3 transition flex items-center justify-center gap-1 disabled:bg-gray-300 disabled:cursor-not-allowed"
         >
           Create an episode
         </button>
@@ -256,7 +256,7 @@ export function Sidebar() {
               key={href}
               href={href}
               className={cn(
-                'flex items-center gap-2.5 px-3 py-[7px] rounded-lg text-[12px] transition-all group',
+                'flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-all group',
                 active
                   ? 'text-gray-900 font-semibold'
                   : 'text-gray-500 font-medium hover:text-gray-800 hover:bg-gray-50'
@@ -275,10 +275,10 @@ export function Sidebar() {
       {/* Weekly plays widget */}
       <div className="mx-3 mb-3 bg-gray-50 rounded-xl p-3">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-gray-500 text-[10px] font-medium">Weekly plays</span>
-          <span className="text-emerald-500 text-[10px] font-semibold">▲ 17%</span>
+          <span className="text-gray-500 text-xs font-medium">Weekly plays</span>
+          <span className="text-emerald-500 text-[11px] font-semibold">▲ 17%</span>
         </div>
-        <p className="text-gray-900 text-[15px] font-bold">738,849</p>
+        <p className="text-gray-900 text-lg font-bold">738,849</p>
         <svg viewBox="0 0 80 24" className="w-full mt-1.5">
           <polyline
             points="0,20 10,18 20,13 30,15 40,7 50,10 60,5 70,8 80,3"
@@ -299,7 +299,7 @@ export function Sidebar() {
 
       {/* Bottom nav */}
       <div className="px-2 pb-3 space-y-0.5 border-t border-gray-100 pt-2">
-        <button className="w-full flex items-center justify-between px-3 py-[7px] rounded-lg text-[11px] font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition">
+        <button className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition">
           <div className="flex items-center gap-2">
             <ToggleLeft size={13} className="text-gray-400" />
             Demo mode
@@ -316,7 +316,7 @@ export function Sidebar() {
           <Link
             key={label}
             href="#"
-            className="flex items-center gap-2.5 px-3 py-[7px] rounded-lg text-[11px] font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-all"
+            className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-all"
           >
             <Icon size={13} className="text-gray-400 shrink-0" />
             {label}

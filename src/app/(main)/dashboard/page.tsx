@@ -22,10 +22,16 @@ interface VideoDto {
   episode: string | null;
   duration: number;
   thumbnail: string | null;
+  chunksURL: string | null;
   createdAt: string;
   publishedAt: string | null;
   adMarkerCount: number;
 }
+
+// Cadence for the auto-refresh interval that polls while any row is still
+// chunking. Matches backend guidance — the worker writes its status update
+// at roughly the same tempo, so 30s is both timely and not chatty.
+const POLL_INTERVAL_MS = 30_000;
 
 const statusConfig: Record<StatusKey, { label: string; icon: typeof CheckCircle2; color: string }> = {
   completed: { label: 'Ready',      icon: CheckCircle2, color: 'text-emerald-500 bg-emerald-50' },
@@ -41,6 +47,54 @@ function formatDate(iso: string | null): string {
     month: 'long',
     year: 'numeric',
   });
+}
+
+// Per-status microcopy for the disabled Watch button's tooltip — tells the
+// user exactly *why* the button isn't live yet and sets expectations about
+// when it will be. Keep these honest: the dashboard's 30-s poll is the only
+// thing that will flip this row to `completed`.
+const WATCH_DISABLED_COPY: Record<Exclude<StatusKey, 'completed'>, string> = {
+  pending:  'Upload hasn’t finished yet. Watch unlocks once the file is on the server.',
+  uploaded: 'File uploaded — streaming build will start shortly.',
+  chunking: 'Encoding HLS streams. This usually takes a few minutes; we’re checking every 30 s.',
+};
+
+function WatchAction({ video }: { video: VideoDto }) {
+  if (video.status === 'completed') {
+    return (
+      <Link
+        href={`/watch/${video.id}`}
+        className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-white bg-gray-900 hover:bg-gray-800 px-2.5 py-1 rounded-lg transition"
+      >
+        <Play size={12} className="fill-white" />
+        Watch
+      </Link>
+    );
+  }
+  const key = (video.status in statusConfig ? video.status : 'pending') as StatusKey;
+  const copy = WATCH_DISABLED_COPY[key as Exclude<StatusKey, 'completed'>];
+  return (
+    <span
+      role="button"
+      aria-disabled="true"
+      tabIndex={0}
+      className="relative group/watch inline-flex items-center gap-1.5 text-[12px] font-semibold text-zinc-500 bg-zinc-100 px-2.5 py-1 rounded-lg cursor-not-allowed"
+    >
+      <Loader2 size={11} className="animate-spin" />
+      Watch
+      {/* Tooltip — appears on hover/focus. `pointer-events-none` keeps the
+          tooltip from eating clicks when it overhangs neighboring buttons.
+          Positioned bottom-right of the button so it doesn't trip on the
+          "Manage ads" action that sits to its right. */}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute top-full right-0 mt-1.5 max-w-[260px] px-2.5 py-1.5 rounded-md bg-zinc-900 text-white text-xs font-medium leading-normal whitespace-normal opacity-0 translate-y-[-2px] group-hover/watch:opacity-100 group-hover/watch:translate-y-0 group-focus-within/watch:opacity-100 group-focus-within/watch:translate-y-0 transition shadow-lg z-20"
+      >
+        {copy}
+        <span className="absolute -top-1 right-4 w-2 h-2 bg-zinc-900 rotate-45" />
+      </span>
+    </span>
+  );
 }
 
 export default function DashboardPage() {
@@ -87,6 +141,29 @@ export default function DashboardPage() {
     window.addEventListener(VIDEO_UPLOADED_EVENT, handler);
     return () => window.removeEventListener(VIDEO_UPLOADED_EVENT, handler);
   }, [loadVideos]);
+
+  // Auto-refresh while any row is still processing — the HLS "Watch" button
+  // appears as soon as status flips to `completed`, so we keep the list fresh
+  // without making the user hit Refresh. Paused while the tab is hidden.
+  const hasWorkInFlight = videos.some((v) => v.status !== 'completed');
+  useEffect(() => {
+    if (!hasWorkInFlight) return;
+    let timer: number | undefined;
+    const start = () => {
+      if (timer != null) return;
+      timer = window.setInterval(() => { void loadVideos(); }, POLL_INTERVAL_MS);
+    };
+    const stop = () => {
+      if (timer != null) { window.clearInterval(timer); timer = undefined; }
+    };
+    if (!document.hidden) start();
+    const onVis = () => { if (document.hidden) stop(); else start(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [hasWorkInFlight, loadVideos]);
 
   const openUploadModal = useCallback((prefill: File | null = null) => {
     if (!currentPodcastId) return; // nothing to upload to yet
@@ -228,16 +305,19 @@ export default function DashboardPage() {
                     {status.label}
                   </div>
 
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                    <Link
-                      href={`/ads?video=${video.id}`}
-                      className="text-xs text-indigo-600 hover:text-indigo-700 font-medium bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg transition"
-                    >
-                      Manage ads
-                    </Link>
-                    <button className="p-1.5 text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 rounded-lg transition">
-                      <MoreHorizontal size={14} />
-                    </button>
+                  <div className="flex items-center gap-1">
+                    <WatchAction video={video} />
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                      <Link
+                        href={`/ads?video=${video.id}`}
+                        className="text-xs text-indigo-600 hover:text-indigo-700 font-medium bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg transition"
+                      >
+                        Manage ads
+                      </Link>
+                      <button className="p-1.5 text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 rounded-lg transition">
+                        <MoreHorizontal size={14} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               );

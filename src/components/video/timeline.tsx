@@ -432,8 +432,42 @@ export function Timeline({
     pendingDisplayTime ?? adPlayheadTime ?? derivedDisplayTime;
   const playheadPx = playheadDisplayTime * pxPerSec;
 
-  // Smoothly interpolate between the ad's ~4 Hz timeupdate events.
-  const playheadTransition = scrubbing ? 'none' : adProgress ? 'left 0.28s linear' : 'none';
+  // Classify the latest `currentTime` delta: a small forward step is natural
+  // playback progress (smooth it), anything else is a seek / reverse jump
+  // (snap so the user sees instant feedback). Measured during render; the
+  // ref update is deferred to an effect so we don't mutate state in render.
+  const prevCurrentTimeRef = useRef(currentTime);
+  const naturalProgress =
+    currentTime - prevCurrentTimeRef.current >= 0 &&
+    currentTime - prevCurrentTimeRef.current <= 1.0;
+  useEffect(() => {
+    prevCurrentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  // CSS-transition smoothing of the playhead between ~4 Hz `timeupdate`
+  // events. 0.25s linear matches Chrome/FF's native tick cadence so each
+  // transition finishes just as the next one starts — the playhead reads
+  // as continuous motion instead of stepwise jumps.
+  //
+  // Linear, not ease-*: anything non-linear accelerates/decelerates between
+  // every tick and the playhead visibly wobbles. Real playback is constant
+  // velocity, so the animation should be too.
+  //
+  // Snap (no transition) when:
+  //   • scrubbing — drags and mouse-down-to-seek must feel instant,
+  //   • optimistic `pendingDisplayTime` — a single click already jumped the
+  //     head to the cursor; no glide across the strip back to the new time,
+  //   • the currentTime delta isn't a natural forward tick (programmatic
+  //     seek, keyboard seek, reverse jump, cross-fade).
+  const smoothPlayhead =
+    !scrubbing &&
+    pendingDisplayTime == null &&
+    (adProgress != null || naturalProgress);
+  const playheadTransition = smoothPlayhead ? 'left 0.25s linear' : 'none';
+  // The played-region overlay animates `width`, not `left`, so it needs its
+  // own declaration — sharing `playheadTransition` would silently drop the
+  // animation on this element (only `left` was whitelisted).
+  const playedOverlayTransition = smoothPlayhead ? 'width 0.25s linear' : 'none';
 
   // Whenever the video actually reports a new currentTime, clear the pending
   // optimistic override so the displayed playhead tracks real playback.
@@ -757,7 +791,7 @@ export function Timeline({
                       background: 'rgba(255,255,255,0.14)',
                       mixBlendMode: 'screen',
                       zIndex: 5,
-                      transition: playheadTransition,
+                      transition: playedOverlayTransition,
                     }}
                   />
                 )}
@@ -818,7 +852,7 @@ export function Timeline({
                           background: '#ffffff',
                           color: cfg.badgeText,
                           border: `1px solid ${cfg.badgeBorder}`,
-                          fontSize: 9,
+                          fontSize: 10,
                           minWidth: a.m.type === 'ab' ? 26 : 18,
                           height: 16,
                           padding: '0 4px',
@@ -924,7 +958,7 @@ export function Timeline({
                 {isLoading && (
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50 px-6">
                     {error ? (
-                      <div className="flex items-center gap-2.5 text-[11px] text-red-300 font-medium tracking-wide text-center">
+                      <div className="flex items-center gap-2.5 text-xs text-red-300 font-medium tracking-wide text-center">
                         <span className="w-4 h-4 rounded-full bg-red-500/20 flex items-center justify-center shrink-0">
                           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
                             <line x1="12" y1="8" x2="12" y2="13"/>
@@ -934,7 +968,7 @@ export function Timeline({
                         {error}
                       </div>
                     ) : (
-                      <div className="flex items-center gap-2 text-[11px] text-white/70 font-medium tracking-wide">
+                      <div className="flex items-center gap-2 text-xs text-white/70 font-medium tracking-wide">
                         <span className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white/80 animate-spin" />
                         Loading timeline…
                       </div>

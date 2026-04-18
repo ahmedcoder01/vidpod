@@ -178,7 +178,7 @@ export function SelectAdsModal({ mode, onConfirm, onCancel }: Props) {
                   key={c}
                   onClick={() => setCampaign(c)}
                   className={cn(
-                    'shrink-0 text-[11px] px-3 py-1 rounded-full font-medium transition',
+                    'shrink-0 text-xs px-3 py-1 rounded-full font-medium transition',
                     campaign === c
                       ? 'bg-gray-900 text-white'
                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
@@ -189,7 +189,7 @@ export function SelectAdsModal({ mode, onConfirm, onCancel }: Props) {
               ))}
             </div>
           )}
-          <p className="text-gray-500 text-[11px] font-medium uppercase tracking-wider">
+          <p className="text-gray-500 text-xs font-medium uppercase tracking-wider">
             Ad library {ads.length > 0 && <span className="text-gray-300 font-normal normal-case">· {ads.length}</span>}
           </p>
         </div>
@@ -206,7 +206,7 @@ export function SelectAdsModal({ mode, onConfirm, onCancel }: Props) {
               <p className="text-red-600 text-sm font-medium">Couldn&apos;t load ads</p>
               <button
                 onClick={() => void refresh()}
-                className="mt-2 text-[11px] text-gray-700 hover:text-gray-900 font-medium underline underline-offset-2"
+                className="mt-2 text-xs text-gray-700 hover:text-gray-900 font-medium underline underline-offset-2"
               >
                 Try again
               </button>
@@ -261,14 +261,14 @@ export function SelectAdsModal({ mode, onConfirm, onCancel }: Props) {
                   {/* Meta */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <p className="text-gray-900 text-xs font-semibold truncate">{ad.title}</p>
+                      <p className="text-gray-900 text-[13px] font-semibold truncate">{ad.title}</p>
                       {ad.isPublicAd && (
-                        <span className="shrink-0 text-[9px] font-bold tracking-wider uppercase text-emerald-700 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded">
+                        <span className="shrink-0 text-[10px] font-bold tracking-wider uppercase text-emerald-700 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded">
                           Public
                         </span>
                       )}
                     </div>
-                    <p className="text-gray-500 text-[11px] mt-0.5 truncate">
+                    <p className="text-gray-500 text-xs mt-0.5 truncate">
                       {ad.advertiser || '—'}
                       {ad.duration > 0 && <span className="text-gray-300 mx-1.5">·</span>}
                       {ad.duration > 0 && <span className="tabular-nums">{formatDuration(ad.duration)}</span>}
@@ -311,7 +311,7 @@ export function SelectAdsModal({ mode, onConfirm, onCancel }: Props) {
 
         {/* Footer */}
         <div className="flex items-center justify-between gap-2 px-5 py-4 border-t border-gray-100">
-          <span className="text-[11px] text-gray-400 tabular-nums">
+          <span className="text-xs text-gray-400 tabular-nums">
             {selected.size > 0 && (mode === 'ab' ? `${selected.size} selected` : 'Selected')}
           </span>
           <div className="flex items-center gap-2">

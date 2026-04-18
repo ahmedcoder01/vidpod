@@ -177,7 +177,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (rawMarkers) {
     // Validate + normalize each marker before touching the DB. We also
     // de-dupe adIds (the @@unique([markerId, adId]) would reject repeats).
-    const normalized = rawMarkers.map((m: Record<string, unknown>) => {
+    type NormalizedMarker = { type: string; startTime: number; label: string | null; adIds: string[] };
+    const normalized: NormalizedMarker[] = rawMarkers.map((m: Record<string, unknown>) => {
       const type = (m.type ?? '').toString();
       const startTime = Number(m.startTime);
       if (!['static', 'auto', 'ab'].includes(type)) {
@@ -187,10 +188,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         throw Object.assign(new Error('Invalid marker startTime'), { status: 400 });
       }
       const label = m.label != null ? String(m.label).slice(0, 120) : null;
-      const rawIds = Array.isArray(m.adIds)
-        ? m.adIds.filter((x: unknown): x is string => typeof x === 'string')
+      const rawIds: string[] = Array.isArray(m.adIds)
+        ? (m.adIds as unknown[]).filter((x): x is string => typeof x === 'string')
         : [];
-      const adIds = Array.from(new Set(rawIds));
+      const adIds: string[] = Array.from(new Set(rawIds));
       return { type, startTime, label, adIds };
     });
 
@@ -200,7 +201,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       // we fan out one create per marker (per-video counts are small).
       await prisma.$transaction([
         prisma.adMarker.deleteMany({ where: { videoId: id } }),
-        ...normalized.map((m: typeof normalized[number]) =>
+        ...normalized.map((m) =>
           prisma.adMarker.create({
             data: {
               type: m.type,

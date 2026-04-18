@@ -111,7 +111,7 @@ export function UserMenu() {
       >
         <div
           className={cn(
-            'w-6 h-6 rounded-full bg-linear-to-br flex items-center justify-center text-white text-[10px] font-bold shrink-0',
+            'w-6 h-6 rounded-full bg-linear-to-br flex items-center justify-center text-white text-[11px] font-bold shrink-0',
             gradient,
           )}
         >
@@ -142,8 +142,8 @@ export function UserMenu() {
               {initials}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-[12.5px] font-semibold text-gray-900 truncate">{name || 'Unnamed'}</p>
-              <p className="text-[11px] text-gray-500 truncate">{email}</p>
+              <p className="text-[13px] font-semibold text-gray-900 truncate">{name || 'Unnamed'}</p>
+              <p className="text-xs text-gray-500 truncate">{email}</p>
             </div>
           </div>
 
@@ -151,7 +151,7 @@ export function UserMenu() {
             <Link
               href="/settings"
               onClick={() => setOpen(false)}
-              className="flex items-center gap-2.5 px-3.5 py-2 text-[12px] text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition"
+              className="flex items-center gap-2.5 px-3.5 py-2 text-[13px] text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition"
               role="menuitem"
             >
               <SettingsIcon size={13} className="text-gray-400" />
@@ -163,7 +163,7 @@ export function UserMenu() {
             <button
               onClick={handleLogout}
               disabled={loggingOut}
-              className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[12px] text-red-600 hover:bg-red-50 transition disabled:opacity-60 disabled:cursor-wait"
+              className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[13px] text-red-600 hover:bg-red-50 transition disabled:opacity-60 disabled:cursor-wait"
               role="menuitem"
             >
               {loggingOut ? (

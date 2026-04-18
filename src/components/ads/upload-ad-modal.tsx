@@ -291,8 +291,8 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
                   <Film size={18} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold text-gray-900 truncate">{file.name}</p>
-                  <p className="text-[11px] text-gray-400 mt-0.5 tabular-nums">
+                  <p className="text-[13px] font-semibold text-gray-900 truncate">{file.name}</p>
+                  <p className="text-xs text-gray-400 mt-0.5 tabular-nums">
                     {formatBytes(file.size)} · {formatSec(fileDur)}
                   </p>
                 </div>
@@ -320,7 +320,7 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
           {!busy && phase !== 'error' && (
             <div className="grid grid-cols-2 gap-3">
               <label className="col-span-2 block">
-                <span className="text-[11px] font-medium text-gray-600">Title</span>
+                <span className="text-xs font-medium text-gray-600">Title</span>
                 <input
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
@@ -329,7 +329,7 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
                 />
               </label>
               <label className="block">
-                <span className="text-[11px] font-medium text-gray-600">Advertiser</span>
+                <span className="text-xs font-medium text-gray-600">Advertiser</span>
                 <input
                   value={advertiser}
                   onChange={(e) => setAdvertiser(e.target.value)}
@@ -338,7 +338,7 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
                 />
               </label>
               <label className="block">
-                <span className="text-[11px] font-medium text-gray-600">Campaign</span>
+                <span className="text-xs font-medium text-gray-600">Campaign</span>
                 <input
                   value={campaign}
                   onChange={(e) => setCampaign(e.target.value)}
@@ -347,7 +347,7 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
                 />
               </label>
               <label className="col-span-2 block">
-                <span className="text-[11px] font-medium text-gray-600">Tags <span className="text-gray-400 font-normal">(comma-separated)</span></span>
+                <span className="text-xs font-medium text-gray-600">Tags <span className="text-gray-400 font-normal">(comma-separated)</span></span>
                 <input
                   value={tagsRaw}
                   onChange={(e) => setTagsRaw(e.target.value)}
@@ -366,7 +366,7 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
                 <p className="text-xs font-semibold text-gray-900">
                   {phase === 'uploading' ? 'Uploading to storage' : 'Finalizing'}
                 </p>
-                <span className="ml-auto text-[11px] text-gray-500 tabular-nums">
+                <span className="ml-auto text-xs text-gray-500 tabular-nums">
                   {phase === 'uploading' ? `${pct}%` : '—'}
                 </span>
               </div>
@@ -377,7 +377,7 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
                 />
               </div>
               {progress && phase === 'uploading' && (
-                <p className="mt-2 text-[10px] text-gray-400 tabular-nums">
+                <p className="mt-2 text-[11px] text-gray-400 tabular-nums">
                   {progress.partsDone}/{progress.partsTotal} parts · {formatBytes(progress.loaded)} of {formatBytes(progress.total)}
                 </p>
               )}
@@ -388,15 +388,15 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
             <div className="flex items-start gap-2 bg-red-50 border border-red-100 rounded-lg p-3">
               <AlertCircle size={14} className="text-red-500 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-red-700">Upload failed</p>
-                <p className="text-[11px] text-red-600 mt-0.5 break-words">{errMsg}</p>
+                <p className="text-[13px] font-semibold text-red-700">Upload failed</p>
+                <p className="text-xs text-red-600 mt-0.5 break-words">{errMsg}</p>
               </div>
             </div>
           )}
 
           {/* Inline errors (non-fatal, e.g. wrong file type) */}
           {phase === 'form' && errMsg && (
-            <p className="text-[11px] text-red-600">{errMsg}</p>
+            <p className="text-xs text-red-600">{errMsg}</p>
           )}
         </div>
 
@@ -412,7 +412,7 @@ export function UploadAdModal({ onUploaded, onCancel }: Props) {
               </button>
             </>
           ) : phase === 'finalizing' ? (
-            <span className="text-[11px] text-gray-500 px-2">Almost there…</span>
+            <span className="text-xs text-gray-500 px-2">Almost there…</span>
           ) : phase === 'error' ? (
             <>
               <button

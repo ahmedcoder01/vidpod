@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { AdMarker, AdType, Ad, Transcript } from '@/lib/types';
+import { AdMarker, AdType, Ad, VideoListDto, VideoDetailDto } from '@/lib/types';
 import { formatTime, generateId } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import { useHistory } from '@/hooks/use-history';
@@ -34,40 +34,6 @@ const STATUS_CONFIG: Record<StatusKey, { label: string; icon: typeof CheckCircle
   pending:   { label: 'Pending',    icon: Clock,        color: 'text-zinc-500 bg-zinc-100' },
 };
 const PLAYABLE: Set<string> = new Set(['uploaded', 'completed']);
-
-// The DTO returned by `/api/videos` — a lightweight list item.
-interface VideoListDto {
-  id: string;
-  title: string;
-  author: string;
-  status: string;
-  episode: string | null;
-  duration: number;
-  thumbnail: string | null;
-  publishedAt: string | null;
-  createdAt: string;
-  adMarkerCount: number;
-}
-
-// The DTO returned by `/api/videos/[id]` — the full editor payload.
-interface VideoDetailDto {
-  id: string;
-  title: string;
-  description: string;
-  author: string;
-  episode: string | null;
-  status: string;
-  duration: number;
-  thumbnail: string | null;
-  fullS3Url: string | null;
-  playbackUrl: string | null;
-  waveformData: number[];
-  transcript: Transcript | null;
-  adMarkers: AdMarker[];
-  createdAt: string;
-  publishedAt: string | null;
-  podcastId: string;
-}
 
 // ── Topbar user chip ──────────────────────────────────────────────────
 // Settings and Bell remain decorative for now; the user chip is wired up
@@ -388,7 +354,7 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
         <div className="shrink-0 bg-[#f5f5f7]/95 backdrop-blur border-b border-black/5 px-6 pt-4 pb-5">
           <button
             onClick={onBack}
-            className="group inline-flex items-center gap-1 text-[12px] text-gray-500 hover:text-gray-900 transition -ml-1 px-1 py-0.5 rounded"
+            className="group inline-flex items-center gap-1 text-[13px] text-gray-500 hover:text-gray-900 transition -ml-1 px-1 py-0.5 rounded"
           >
             <ArrowLeft size={13} className="transition group-hover:-translate-x-0.5" />
             <span>Ads</span>
@@ -436,7 +402,7 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
           <div className="min-w-0 flex-1">
             <button
               onClick={onBack}
-              className="group inline-flex items-center gap-1 text-[12px] text-gray-500 hover:text-gray-900 transition mb-2 -ml-1 px-1 py-0.5 rounded"
+              className="group inline-flex items-center gap-1 text-[13px] text-gray-500 hover:text-gray-900 transition mb-2 -ml-1 px-1 py-0.5 rounded"
             >
               <ArrowLeft size={13} className="transition group-hover:-translate-x-0.5" />
               <span>Ads</span>
@@ -444,7 +410,7 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
             <h1 className="text-gray-900 font-bold leading-[1.22] tracking-tight text-[22px] sm:text-[24px] max-w-4xl">
               {video.title}
             </h1>
-            <p className="text-gray-500 text-[12px] mt-2 tracking-wide">
+            <p className="text-gray-500 text-[13px] mt-2 tracking-wide">
               {video.episode && <span>Episode {video.episode}</span>}
               {video.episode && (video.publishedAt || video.createdAt) && <span className="mx-1.5">•</span>}
               {formatDate(video.publishedAt ?? video.createdAt)}
@@ -455,7 +421,7 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
               <button
                 onClick={() => setShowTranscript((v) => !v)}
                 className={cn(
-                  'group relative inline-flex items-center gap-1.5 text-[12px] font-semibold text-white px-3.5 py-2 rounded-lg overflow-hidden transition-[transform,box-shadow] duration-200 active:scale-[0.97]',
+                  'group relative inline-flex items-center gap-1.5 text-[13px] font-semibold text-white px-3.5 py-2 rounded-lg overflow-hidden transition-[transform,box-shadow] duration-200 active:scale-[0.97]',
                   showTranscript
                     ? 'bg-gray-900 hover:bg-gray-800 shadow-[0_1px_2px_rgba(0,0,0,0.1)]'
                     : 'transcript-fancy shadow-[0_4px_14px_-4px_rgba(124,58,237,0.55),0_2px_4px_rgba(17,24,39,0.15)] hover:shadow-[0_6px_20px_-4px_rgba(124,58,237,0.7),0_2px_6px_rgba(17,24,39,0.2)]',
@@ -507,14 +473,14 @@ function AdEditor({ videoId, onBack }: { videoId: string; onBack: () => void }) 
                       <td className="pl-4 pr-2 py-3 text-xs text-gray-400 w-5">{i + 1}</td>
                       <td className="px-2 py-3 text-xs font-mono text-gray-700 whitespace-nowrap">{formatTime(m.startTime)}</td>
                       <td className="px-2 py-3">
-                        <span className={cn('px-2 py-0.5 rounded-md text-[10px] font-semibold', TYPE_BADGE[m.type])}>
+                        <span className={cn('px-2 py-0.5 rounded-md text-[11px] font-semibold', TYPE_BADGE[m.type])}>
                           {TYPE_LABELS[m.type]}
                         </span>
                       </td>
                       <td className="px-2 py-3">
                         <button
                           onClick={(e) => { e.stopPropagation(); setEditingMarker(m); }}
-                          className="text-[11px] text-gray-500 hover:text-gray-900 font-medium transition px-1"
+                          className="text-[12px] text-gray-500 hover:text-gray-900 font-medium transition px-1"
                         >
                           Edit
                         </button>

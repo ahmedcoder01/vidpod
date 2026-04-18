@@ -279,17 +279,17 @@ export function UploadVideoModal({ initialFile, onClose, onUploaded }: Props) {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-2xl w-full max-w-[1100px] animate-slide-in flex overflow-hidden"
+        className="bg-white rounded-2xl w-full max-w-[880px] animate-slide-in flex overflow-hidden"
         style={{
-          height: 'min(88vh, 820px)',
-          minHeight: 620,
+          height: 'min(82vh, 720px)',
+          minHeight: 560,
           boxShadow:
             '0 32px 80px -16px rgba(0,0,0,0.45), 0 12px 32px -8px rgba(0,0,0,0.22), 0 0 0 1px rgba(0,0,0,0.04)',
         }}
       >
         {/* ─── Left sidebar: vertical stepper ─────────────────────────── */}
         <aside className="w-[280px] shrink-0 bg-linear-to-br from-zinc-50 to-zinc-100/60 border-r border-zinc-200/70 flex flex-col">
-          <div className="px-6 pt-7 pb-5 border-b border-zinc-200/60">
+          <div className="px-5 pt-6 pb-4 border-b border-zinc-200/60">
             <div className="flex items-center gap-2">
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                 <path d="M10 2L18 16H2L10 2Z" fill="#111827" />
@@ -299,7 +299,7 @@ export function UploadVideoModal({ initialFile, onClose, onUploaded }: Props) {
               </span>
             </div>
             {currentPodcast && (
-              <p className="text-zinc-500 text-[11px] mt-1.5 truncate">
+              <p className="text-zinc-500 text-xs mt-1.5 truncate">
                 to <span className="text-zinc-800 font-medium">{currentPodcast.title}</span>
               </p>
             )}
@@ -308,7 +308,7 @@ export function UploadVideoModal({ initialFile, onClose, onUploaded }: Props) {
             <VerticalStepper step={step} />
           </nav>
           <div className="px-5 py-4 border-t border-zinc-200/60">
-            <p className="text-[10px] text-zinc-400 leading-relaxed">
+            <p className="text-[11px] text-zinc-400 leading-relaxed">
               Files upload directly to S3 in parallel parts. Processing continues
               in the background after the upload completes.
             </p>
@@ -317,12 +317,12 @@ export function UploadVideoModal({ initialFile, onClose, onUploaded }: Props) {
 
         {/* ─── Main column ─────────────────────────────────────────────── */}
         <div className="flex-1 flex flex-col min-w-0 bg-white">
-          <header className="flex items-start justify-between px-8 pt-7 pb-5 border-b border-zinc-100">
+          <header className="flex items-start justify-between px-6 pt-6 pb-4 border-b border-zinc-100">
             <div>
-              <h2 className="text-zinc-900 font-semibold text-[17px] tracking-tight">
+              <h2 className="text-zinc-900 font-semibold text-[15px] tracking-tight">
                 {STEP_META[step].label}
               </h2>
-              <p className="text-zinc-500 text-[12px] mt-0.5">
+              <p className="text-zinc-500 text-xs mt-0.5">
                 {STEP_META[step].hint}
               </p>
             </div>
@@ -337,7 +337,7 @@ export function UploadVideoModal({ initialFile, onClose, onUploaded }: Props) {
           </header>
 
           <div className="flex-1 overflow-y-auto">
-            <div key={step} className={cn('px-8 py-7 h-full', animationClass)}>
+            <div key={step} className={cn('px-6 py-5 h-full', animationClass)}>
               {step === 'details' && (
                 <DetailsStep
                   title={title} setTitle={setTitle}
@@ -498,13 +498,13 @@ function VerticalStepper({ step }: { step: StepKey }) {
               <div className="pt-0.5 pb-3 min-w-0">
                 <p
                   className={cn(
-                    'text-[12.5px] transition-colors',
+                    'text-[13px] transition-colors',
                     active ? 'text-zinc-900 font-semibold' : done ? 'text-zinc-700 font-medium' : 'text-zinc-500 font-medium',
                   )}
                 >
                   {STEP_META[s].label}
                 </p>
-                <p className="text-[10.5px] text-zinc-400 mt-0.5 leading-snug">
+                <p className="text-[11px] text-zinc-400 mt-0.5 leading-snug">
                   {STEP_META[s].sub}
                 </p>
               </div>
@@ -532,7 +532,7 @@ function DetailsStep({
     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-8">
       <div className="space-y-5">
         <div>
-          <label className="block text-zinc-700 text-[12px] font-semibold mb-1.5">
+          <label className="block text-zinc-700 text-xs font-medium mb-1.5">
             Episode title <span className="text-red-500">*</span>
           </label>
           <input
@@ -546,7 +546,7 @@ function DetailsStep({
           <p className="text-[11px] text-zinc-400 mt-1.5">Shown as the episode title in your library.</p>
         </div>
         <div>
-          <label className="block text-zinc-700 text-[12px] font-semibold mb-1.5">Episode number</label>
+          <label className="block text-zinc-700 text-xs font-medium mb-1.5">Episode number</label>
           <input
             value={episode}
             onChange={(e) => setEpisode(e.target.value)}
@@ -557,7 +557,7 @@ function DetailsStep({
           <p className="text-[11px] text-zinc-400 mt-1.5">Optional — helps you group episodes by season.</p>
         </div>
         <div>
-          <label className="block text-zinc-700 text-[12px] font-semibold mb-1.5">Description</label>
+          <label className="block text-zinc-700 text-xs font-medium mb-1.5">Description</label>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
@@ -573,7 +573,7 @@ function DetailsStep({
       {/* Preview card */}
       <aside className="hidden lg:block">
         <div className="sticky top-0">
-          <p className="text-[10.5px] font-semibold uppercase tracking-wider text-zinc-400 mb-2.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2.5">
             Preview
           </p>
           <div className="bg-linear-to-br from-zinc-50 to-white border border-zinc-200 rounded-2xl p-5 shadow-[0_1px_2px_rgba(0,0,0,0.02),0_8px_24px_-8px_rgba(0,0,0,0.04)]">
@@ -590,14 +590,14 @@ function DetailsStep({
                 Pending
               </span>
             </div>
-            <p className="text-[13.5px] font-semibold text-zinc-900 leading-snug line-clamp-2">
+            <p className="text-[13px] font-semibold text-zinc-900 leading-snug line-clamp-2">
               {title || 'Untitled episode'}
             </p>
             {podcastTitle && (
-              <p className="text-[11px] text-zinc-500 mt-0.5 truncate">{podcastTitle}</p>
+              <p className="text-xs text-zinc-500 mt-0.5 truncate">{podcastTitle}</p>
             )}
             {description && (
-              <p className="text-[11.5px] text-zinc-500 mt-3 line-clamp-3 leading-relaxed">
+              <p className="text-xs text-zinc-500 mt-3 line-clamp-3 leading-relaxed">
                 {description}
               </p>
             )}
@@ -699,8 +699,8 @@ function FileStep({
             <Upload size={30} className="text-white" />
           </div>
           <div>
-            <p className="text-zinc-900 font-semibold text-[16px]">Drop your video here</p>
-            <p className="text-zinc-500 text-[12.5px] mt-1.5">
+            <p className="text-zinc-900 font-semibold text-[15px]">Drop your video here</p>
+            <p className="text-zinc-500 text-[13px] mt-1.5">
               or click to browse · MP4, MOV, WebM · up to 5 GiB
             </p>
           </div>
@@ -724,7 +724,7 @@ function FileStep({
 
 function FormatBadge({ children }: { children: React.ReactNode }) {
   return (
-    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 bg-zinc-100 border border-zinc-200 rounded-md px-2 py-0.5">
+    <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 bg-zinc-100 border border-zinc-200 rounded-md px-2 py-0.5">
       {children}
     </span>
   );
@@ -733,7 +733,7 @@ function FormatBadge({ children }: { children: React.ReactNode }) {
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
     <div className="bg-white border border-zinc-200/80 rounded-xl px-3 py-2.5">
-      <p className="text-[9.5px] font-semibold uppercase tracking-wider text-zinc-400">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
         {label}
       </p>
       <p className="text-[13px] font-semibold text-zinc-900 mt-0.5 tabular-nums truncate">
@@ -787,13 +787,13 @@ function UploadStep({
         <div className="flex items-center gap-5">
           <ProgressRing fraction={fraction} />
           <div className="min-w-0 flex-1">
-            <p className="text-[10.5px] font-semibold uppercase tracking-wider text-zinc-400 mb-1">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1">
               {initializing ? 'Initializing' : 'Uploading'}
             </p>
-            <p className="text-[16px] font-semibold text-zinc-900 truncate">
+            <p className="text-[15px] font-semibold text-zinc-900 truncate">
               {file?.name ?? 'video file'}
             </p>
-            <p className="text-[12px] text-zinc-500 mt-1 tabular-nums">
+            <p className="text-xs text-zinc-500 mt-1 tabular-nums">
               {progress
                 ? <>{formatBytes(progress.loaded)} of {formatBytes(progress.total)}</>
                 : 'Preparing multipart upload\u2026'}
@@ -803,10 +803,10 @@ function UploadStep({
 
         <div className="flex-1 flex flex-col">
           <div className="flex items-center justify-between mb-2.5">
-            <p className="text-[10.5px] font-semibold uppercase tracking-wider text-zinc-400">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
               Parts
             </p>
-            <span className="text-[10.5px] text-zinc-500 tabular-nums font-medium">
+            <span className="text-[11px] text-zinc-500 tabular-nums font-medium">
               {progress ? <>{progress.partsDone} / {progress.partsTotal} complete</> : '—'}
             </span>
           </div>
@@ -832,7 +832,7 @@ function UploadStep({
 
       {/* Right: stats panel */}
       <aside className="space-y-3">
-        <p className="text-[10.5px] font-semibold uppercase tracking-wider text-zinc-400">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
           Live stats
         </p>
         <div className="grid grid-cols-2 gap-3">
@@ -859,7 +859,7 @@ function UploadStep({
         </div>
         <div className="bg-white border border-zinc-200/70 rounded-2xl px-4 py-4 mt-2">
           <div className="flex items-center justify-between">
-            <span className="text-[10.5px] font-semibold uppercase tracking-wider text-zinc-400">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
               Elapsed
             </span>
             <span className="text-[14px] font-semibold text-zinc-900 tabular-nums">
@@ -868,10 +868,10 @@ function UploadStep({
           </div>
           <div className="h-[1px] bg-zinc-100 my-3" />
           <div className="flex items-center justify-between">
-            <span className="text-[10.5px] font-semibold uppercase tracking-wider text-zinc-400">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
               Concurrency
             </span>
-            <span className="text-[12.5px] font-medium text-zinc-700 tabular-nums">
+            <span className="text-[13px] font-medium text-zinc-700 tabular-nums">
               4 parts in parallel
             </span>
           </div>
@@ -899,7 +899,7 @@ function StatCard({
     <div className="bg-white border border-zinc-200/70 rounded-2xl px-4 py-3.5">
       <div className="flex items-center gap-1.5 mb-1.5">
         <Icon size={11} className="text-zinc-400" />
-        <span className="text-[9.5px] font-semibold uppercase tracking-wider text-zinc-400">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
           {label}
         </span>
       </div>
@@ -998,8 +998,8 @@ function DoneStep({
             />
           </svg>
         </div>
-        <p className="text-[18px] font-semibold text-zinc-900">Upload complete</p>
-        <p className="text-[12.5px] text-zinc-500 mt-2 max-w-md mx-auto leading-relaxed">
+        <p className="text-[16px] font-semibold text-zinc-900">Upload complete</p>
+        <p className="text-[13px] text-zinc-500 mt-2 max-w-md mx-auto leading-relaxed">
           <span className="font-medium text-zinc-800">{title || 'Your episode'}</span> is now
           in your library. We&apos;ll process it in the background and mark it{' '}
           <span className="font-medium text-emerald-700">Ready</span> when transcoding finishes.

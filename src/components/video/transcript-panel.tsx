@@ -4,6 +4,13 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { ArrowDown, ArrowUp, Search, X } from 'lucide-react';
 import type { Transcript, TranscriptWord } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import {
+  escapeRegExp,
+  findActiveLineIndex,
+  findActiveWordIndex,
+  groupWordsIntoLines,
+  mmss,
+} from './transcript-core';
 
 interface Props {
   transcript: Transcript;
@@ -12,105 +19,16 @@ interface Props {
   onClose: () => void;
 }
 
-type Line = {
-  start: number;
-  end: number;
-  words: TranscriptWord[];
-  text: string;          // concatenated with spaces; used for search
-  lowerText: string;     // cached for case-insensitive match
-};
-
-const LINE_MAX_DUR = 12;   // seconds
-const LINE_MAX_CHARS = 180;
 const MANUAL_SCROLL_LOCK_MS = 4000;
-
-// Group the flat word array into readable lines. Priority: sentence boundary
-// (word text ends in . ? !), else duration ≥ 12s, else ~180 chars. The backend
-// appends punctuation onto the preceding word's text, so we sniff the last char.
-function groupWordsIntoLines(words: TranscriptWord[]): Line[] {
-  if (!words.length) return [];
-  const lines: Line[] = [];
-  let buf: TranscriptWord[] = [];
-  let chars = 0;
-  let startT = words[0].start;
-
-  const flush = () => {
-    if (!buf.length) return;
-    const text = buf.map((w) => w.text).join(' ');
-    lines.push({
-      start: startT,
-      end: buf[buf.length - 1].end,
-      words: buf,
-      text,
-      lowerText: text.toLowerCase(),
-    });
-    buf = [];
-    chars = 0;
-  };
-
-  for (const w of words) {
-    if (!buf.length) startT = w.start;
-    buf.push(w);
-    chars += w.text.length + 1;
-
-    const last = w.text[w.text.length - 1];
-    const isSentenceEnd = last === '.' || last === '!' || last === '?';
-    const overDur = w.end - startT >= LINE_MAX_DUR;
-    const overChars = chars >= LINE_MAX_CHARS;
-
-    if (isSentenceEnd || overDur || overChars) flush();
-  }
-  flush();
-  return lines;
-}
-
-// Binary search for the line containing `t`. Returns -1 if none.
-function findActiveLine(lines: Line[], t: number): number {
-  let lo = 0;
-  let hi = lines.length - 1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    const l = lines[mid];
-    if (t < l.start) hi = mid - 1;
-    else if (t >= l.end) lo = mid + 1;
-    else return mid;
-  }
-  // Between lines (gap) → snap to the previous line while it's still close.
-  // When t is between l[i].end and l[i+1].start, show l[i] as active-ish; but
-  // return -1 so the "current word" is nothing — avoids flashing bold on stale
-  // words during silence.
-  return -1;
-}
-
-function mmss(s: number) {
-  const safe = Math.max(0, Math.floor(s));
-  const m = Math.floor(safe / 60);
-  const ss = safe % 60;
-  return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
-}
-
-// Escape a user search query for use in RegExp (for match highlighting).
-function escapeRegExp(s: string) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 export function TranscriptPanel({ transcript, currentTime, onSeek, onClose }: Props) {
   const lines = useMemo(() => groupWordsIntoLines(transcript.words), [transcript.words]);
 
   // Active line + active word inside it.
-  const activeLineIdx = useMemo(() => findActiveLine(lines, currentTime), [lines, currentTime]);
+  const activeLineIdx = useMemo(() => findActiveLineIndex(lines, currentTime), [lines, currentTime]);
   const activeWordIdx = useMemo(() => {
     if (activeLineIdx < 0) return -1;
-    const ws = lines[activeLineIdx].words;
-    let lo = 0, hi = ws.length - 1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const w = ws[mid];
-      if (currentTime < w.start) hi = mid - 1;
-      else if (currentTime >= w.end) lo = mid + 1;
-      else return mid;
-    }
-    return -1;
+    return findActiveWordIndex(lines[activeLineIdx], currentTime);
   }, [lines, activeLineIdx, currentTime]);
 
   // ── Auto-scroll, with manual-scroll lock ──────────────────────────────
@@ -262,7 +180,7 @@ export function TranscriptPanel({ transcript, currentTime, onSeek, onClose }: Pr
         <div className="flex items-center justify-between gap-2 mb-2.5">
           <div className="flex items-baseline gap-2 min-w-0">
             <span className="text-gray-900 text-sm font-semibold">Transcript</span>
-            <span className="text-gray-400 text-[11px] tabular-nums">{headerMatchLabel}</span>
+            <span className="text-gray-400 text-xs tabular-nums">{headerMatchLabel}</span>
           </div>
           <button
             onClick={onClose}
@@ -372,7 +290,7 @@ export function TranscriptPanel({ transcript, currentTime, onSeek, onClose }: Pr
               scrollActiveIntoView();
               setLockedOffscreen(false);
             }}
-            className="sticky bottom-3 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 bg-gray-900 text-white text-[11px] font-medium rounded-full px-3 py-1.5 shadow-lg hover:bg-gray-800 transition"
+            className="sticky bottom-3 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 bg-gray-900 text-white text-xs font-medium rounded-full px-3 py-1.5 shadow-lg hover:bg-gray-800 transition"
             style={{ marginLeft: 'calc(50% - 68px)' }}
           >
             <ArrowDown size={11} />
