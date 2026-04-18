@@ -116,8 +116,16 @@ model Ad {
   campaign   String  @default("")
   duration   Float   @default(0) // seconds
   thumbnail  String?
+  // Public URL the <video> element loads directly. Derived from `s3Key`
+  // via `publicUrlFor` when the client asks /api/ads.
   videoUrl   String?
+  // Canonical S3 key, e.g. "ads/<adId>.mp4". Source of truth for the object
+  // location; `videoUrl` is just its public projection.
+  s3Key      String?
   tags       String  @default("[]") // JSON-encoded string[]
+  // "pending" while the upload is in flight; "ready" once the S3 object
+  // exists and /api/ads should surface it. GET filters on status='ready'.
+  status     String  @default("ready")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -130,6 +138,7 @@ model Ad {
 
   @@index([uploaderId])
   @@index([isPublicAd])
+  @@index([status])
 }
 
 // ─── Ad markers (where ads splice into a video) ───────────

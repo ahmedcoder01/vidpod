@@ -6,6 +6,8 @@ import {
   AbortMultipartUploadCommand,
   UploadPartCommand,
   GetObjectCommand,
+  PutObjectCommand,
+  HeadObjectCommand,
   type CompletedPart,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -218,5 +220,66 @@ export async function abortMultipartUpload(args: { key: string; uploadId: string
       UploadId: args.uploadId,
     }),
   );
+}
+
+// ─── Ad uploads (single-part) ─────────────────────────────────────────
+// Ads are short (usually <5 MiB) so single-part PUT is simpler and faster
+// than multipart. Objects land under a hardcoded `ads/` prefix — NOT the
+// env-driven UPLOAD_PREFIX — because the bucket policy grants public read
+// on `ads/*` so the <video> tag can stream them without signed URLs.
+const AD_PATH_PREFIX = 'ads/';
+
+// Canonical S3 key for an ad upload. The adId (cuid) is already globally
+// unique, so a flat layout is fine. Keeping the filename `.mp4` so S3 /
+// CloudFront can send a correct Content-Type header if ever missing.
+export function buildAdObjectKey(adId: string): string {
+  return `${AD_PATH_PREFIX}${adId}.mp4`;
+}
+
+export interface PresignedAdUpload {
+  key: string;
+  uploadUrl: string;
+  // Headers the browser MUST send on the PUT — they're included in the
+  // SigV4 signature, so omitting them makes S3 reject with 403.
+  requiredHeaders: Record<string, string>;
+  publicUrl: string;
+}
+
+export async function createPresignedAdUpload(args: {
+  adId: string;
+  contentType: string;
+  // Survives as x-amz-meta-* on the object so we can trace an orphan file
+  // back to its uploader/ad without the DB.
+  metadata?: Record<string, string>;
+}): Promise<PresignedAdUpload> {
+  const c = client();
+  const key = buildAdObjectKey(args.adId);
+  const cmd = new PutObjectCommand({
+    Bucket: BUCKET!,
+    Key: key,
+    ContentType: args.contentType,
+    Metadata: args.metadata,
+  });
+  const uploadUrl = await getSignedUrl(c, cmd, { expiresIn: SIGNED_URL_TTL_SECONDS });
+  const requiredHeaders: Record<string, string> = { 'Content-Type': args.contentType };
+  if (args.metadata) {
+    for (const [k, v] of Object.entries(args.metadata)) {
+      requiredHeaders[`x-amz-meta-${k.toLowerCase()}`] = v;
+    }
+  }
+  return { key, uploadUrl, requiredHeaders, publicUrl: publicUrlFor(key) };
+}
+
+// HEAD the object to confirm the client actually uploaded it before we flip
+// the Ad row to status='ready'. Cheap ($0 below free tier) and prevents
+// orphan DB rows if the browser dies mid-PUT.
+export async function adObjectExists(key: string): Promise<boolean> {
+  const c = client();
+  try {
+    await c.send(new HeadObjectCommand({ Bucket: BUCKET!, Key: key }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 

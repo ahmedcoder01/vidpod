@@ -60,8 +60,12 @@ async function main() {
     console.log(`✔ podcast: ${show.id} (${show.title})`);
   }
 
-  // Ads (library)
+  // Ads (library). The mock n8n ad is flagged isPublicAd=true so every user
+  // sees it out of the box. Its s3Key points at `ads/ad1.mp4` under the
+  // publicly-readable `ads/*` prefix — drop the mp4 there once and it
+  // streams to everyone without presigning.
   for (const ad of mockAds) {
+    const s3Key = `ads/${ad.id}.mp4`;
     await prisma.ad.upsert({
       where: { id: ad.id },
       update: {
@@ -71,8 +75,11 @@ async function main() {
         duration: ad.duration,
         thumbnail: ad.thumbnail,
         videoUrl: ad.videoUrl,
+        s3Key,
         tags: JSON.stringify(ad.tags ?? []),
-        uploaderId: user.id,
+        status: 'ready',
+        isPublicAd: true,
+        uploaderId: null,
       },
       create: {
         id: ad.id,
@@ -82,11 +89,14 @@ async function main() {
         duration: ad.duration,
         thumbnail: ad.thumbnail,
         videoUrl: ad.videoUrl,
+        s3Key,
         tags: JSON.stringify(ad.tags ?? []),
-        uploaderId: user.id,
+        status: 'ready',
+        isPublicAd: true,
+        uploaderId: null,
       },
     });
-    console.log(`✔ ad:   ${ad.id} (${ad.title})`);
+    console.log(`✔ ad:   ${ad.id} (${ad.title})  [public]`);
   }
 
   // All seeded videos belong to the first mock podcast (Diary Of A CEO) since

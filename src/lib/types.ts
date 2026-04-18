@@ -47,6 +47,7 @@ export interface Ad {
   thumbnail?: string;
   videoUrl?: string;
   tags: string[];
+  isPublicAd?: boolean; // platform-provided ad vs user-uploaded
 }
 
 export interface User {
