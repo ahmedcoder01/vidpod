@@ -72,7 +72,13 @@ export function Timeline({
     if (!el) return;
     const obs = new ResizeObserver(([entry]) => setVisibleW(entry.contentRect.width));
     obs.observe(el);
-    setVisibleW(el.clientWidth);
+    // Match `contentRect.width` semantics — content-box width, padding excluded.
+    // Mixing `clientWidth` (includes padding) with `contentRect.width` leaves
+    // `visibleW` ~20px too large on the first render, so at zoom=1 the inner
+    // div overflows by exactly the padding amount, pinning a phantom scrollbar.
+    const cs = getComputedStyle(el);
+    const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    setVisibleW(Math.max(0, el.clientWidth - pad));
     return () => obs.disconnect();
   }, []);
 
@@ -244,6 +250,14 @@ export function Timeline({
     return () => el.removeEventListener('wheel', onWheel);
   }, [zoom, innerW, visibleW, isLoading]);
 
+  // Snap scroll to the origin when zooming back to 1×. The browser would
+  // clamp scrollLeft on its own once content shrinks, but a stale non-zero
+  // value briefly after the transition can keep the horizontal scrollbar
+  // visible for one frame. Explicit reset avoids that.
+  useEffect(() => {
+    if (zoom === 1 && scrollRef.current) scrollRef.current.scrollLeft = 0;
+  }, [zoom]);
+
   // Auto-scroll when playhead leaves viewport (not while user is scrubbing).
   useEffect(() => {
     const el = scrollRef.current;
@@ -278,7 +292,11 @@ export function Timeline({
       <div className="px-4 pb-3">
         <div
           ref={scrollRef}
-          className="timeline-scroll relative overflow-x-auto overflow-y-visible"
+          // overflow-x only when we actually need to scroll. At zoom=1 the
+          // content is designed to fit exactly; forcing `auto` there invites
+          // a phantom scrollbar whenever sub-pixel rounding pushes innerW a
+          // hair past the content box.
+          className={`timeline-scroll relative overflow-y-visible ${zoom > 1 ? 'overflow-x-auto' : 'overflow-x-hidden'}`}
           style={{ paddingTop: 18, paddingLeft: 10, paddingRight: 10 }}
         >
           <div style={{ width: innerW, position: 'relative' }}>
