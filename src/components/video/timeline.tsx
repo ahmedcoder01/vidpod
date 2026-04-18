@@ -55,6 +55,26 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
+// Append a rounded-rectangle sub-path to the current canvas path. Kept
+// manual (rather than `ctx.roundRect`) so the timeline stays paintable on
+// every evergreen browser without a polyfill.
+function addRoundedRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number, r: number,
+) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
+}
+
 function makeAdDurationResolver(adInfo: Record<string, AdInfo>) {
   return (m: AdMarker): number => {
     const ids = m.adIds ?? [];
@@ -257,93 +277,144 @@ export function Timeline({
   const innerW = Math.max(visibleW, visibleW * zoom);
   const pxPerSec = innerW / totalDur;
 
-  // Memoized waveform SVG. Deliberately does NOT depend on playheadDisplayTime
-  // or currentTime — the "played-region" brightness is painted by a single
-  // overlay div (see below), not by per-bar opacity. Keeping this stable
-  // across timeupdate ticks is the core of the perf fix: 300 <rect>s no
-  // longer diff 4× per second.
-  const waveformSvg = useMemo(() => {
-    return segments.map((seg, i) => {
-      const segLeftPx = seg.displayStart * pxPerSec;
-      const segWidthPx = (seg.displayEnd - seg.displayStart) * pxPerSec;
-      const srcLen = waveformData.length;
+  // ── Canvas waveform ─────────────────────────────────────────────────
+  // Replaces a per-segment <svg> tree that held hundreds of <rect>s.
+  // One <canvas> covering the whole strip means the browser paints all
+  // bars in a single fill call, and React no longer reconciles thousands
+  // of SVG children on zoom / marker / resize changes. That's what makes
+  // long videos feel responsive again.
+  const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Reference-equality tracker for `waveformData` so the mount-in
+  // stagger only plays when the underlying data changes (new video
+  // loaded), not every time zoom / markers shift the layout.
+  const lastWaveformDataRef = useRef<number[] | null>(null);
 
-      // Empty state — backend hasn't populated waveformData yet.
-      if (srcLen === 0) {
-        return (
-          <div
-            key={i}
-            className="absolute top-0 bottom-0 waveform-shimmer"
-            style={{
-              left: segLeftPx,
-              width: segWidthPx,
-              background:
-                'linear-gradient(180deg, #f0abfc 0%, #e879f9 50%, #f0abfc 100%)',
-              pointerEvents: 'none',
-            }}
-          />
-        );
-      }
+  useEffect(() => {
+    const cv = waveformCanvasRef.current;
+    if (!cv) return;
+
+    // HiDPI, but cap the device pixel ratio so extremely wide timelines
+    // (e.g. long video × 8× zoom) don't blow past the browser's maximum
+    // canvas surface size.
+    const MAX_PHYS_W = 8192;
+    const cssW = Math.max(1, Math.floor(innerW));
+    const cssH = STRIP_H;
+    const idealDpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr =
+      cssW * idealDpr > MAX_PHYS_W ? Math.max(1, MAX_PHYS_W / cssW) : idealDpr;
+
+    if (cv.width !== Math.floor(cssW * dpr) || cv.height !== Math.floor(cssH * dpr)) {
+      cv.width = Math.floor(cssW * dpr);
+      cv.height = Math.floor(cssH * dpr);
+    }
+    cv.style.width = `${cssW}px`;
+    cv.style.height = `${cssH}px`;
+
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const srcLen = waveformData.length;
+
+    // Empty state — the shimmer overlays in JSX handle the look. Clear
+    // the canvas so a stale frame from a previous video doesn't linger.
+    if (srcLen === 0) {
+      ctx.clearRect(0, 0, cssW, cssH);
+      return;
+    }
+
+    const midY = STRIP_H / 2;
+    const halfMax = STRIP_H * 0.42;
+    const BAR_GAP = 1;
+
+    // Precompute every bar position up front so the rAF loop only does
+    // path-building + one fill per frame, not data sampling.
+    type BarPack = { x: number; w: number; halfH: number; delay: number };
+    type SegPack = { leftPx: number; widthPx: number; bars: BarPack[] };
+    const packs: SegPack[] = segments.map((seg) => {
+      const segLeftPx = seg.displayStart * pxPerSec;
+      const segWidthPx = Math.max(0, (seg.displayEnd - seg.displayStart) * pxPerSec);
+      if (segWidthPx < 2) return { leftPx: segLeftPx, widthPx: segWidthPx, bars: [] };
 
       const totalBars = Math.max(8, Math.floor(segWidthPx / 4));
       const srcStart = (seg.videoStart / videoDur) * srcLen;
       const srcEnd = (seg.videoEnd / videoDur) * srcLen;
-      const midY = STRIP_H / 2;
-      const halfMax = STRIP_H * 0.42;
-      const barGap = 1;
-      const barW = Math.max(
-        1.5,
-        (segWidthPx - barGap * (totalBars - 1)) / totalBars,
-      );
-
-      return (
-        <svg
-          key={i}
-          className="absolute"
-          style={{
-            top: 0,
-            left: segLeftPx,
-            width: segWidthPx,
-            height: STRIP_H,
-            background: '#f0abfc',
-            pointerEvents: 'none',
-          }}
-          viewBox={`0 0 ${Math.max(1, segWidthPx)} ${STRIP_H}`}
-          preserveAspectRatio="none"
-        >
-          {Array.from({ length: totalBars }).map((_, k) => {
-            const srcIdx = Math.floor(
-              srcStart + ((k + 0.5) / totalBars) * (srcEnd - srcStart),
-            );
-            const rawAmp = waveformData[clamp(srcIdx, 0, srcLen - 1)] ?? 0;
-            const amp = Math.max(0.06, rawAmp);
-            const halfH = amp * halfMax;
-            const xCenter = ((k + 0.5) / totalBars) * segWidthPx;
-            const x = xCenter - barW / 2;
-
-            // Stagger-rise on mount only. Delay is small enough to stay
-            // under 150ms total for a 300-bar strip.
-            const delay = `${(k * 0.4).toFixed(1)}ms`;
-
-            return (
-              <rect
-                key={k}
-                className="waveform-bar"
-                x={x}
-                y={midY - halfH}
-                width={barW}
-                height={halfH * 2}
-                rx={Math.min(barW / 2, 1.2)}
-                fill="#ffffff"
-                opacity={0.82}
-                style={{ ['--d' as string]: delay } as React.CSSProperties}
-              />
-            );
-          })}
-        </svg>
-      );
+      const barW = Math.max(1.5, (segWidthPx - BAR_GAP * (totalBars - 1)) / totalBars);
+      const bars: BarPack[] = new Array(totalBars);
+      for (let k = 0; k < totalBars; k++) {
+        const srcIdx = Math.floor(srcStart + ((k + 0.5) / totalBars) * (srcEnd - srcStart));
+        const rawAmp = waveformData[clamp(srcIdx, 0, srcLen - 1)] ?? 0;
+        const amp = Math.max(0.06, rawAmp);
+        const halfH = amp * halfMax;
+        const xCenter = ((k + 0.5) / totalBars) * segWidthPx;
+        bars[k] = { x: segLeftPx + xCenter - barW / 2, w: barW, halfH, delay: k * 0.4 };
+      }
+      return { leftPx: segLeftPx, widthPx: segWidthPx, bars };
     });
-  }, [segments, waveformData, pxPerSec, videoDur]);
+
+    // Only restage the intro animation when waveformData *itself* changes
+    // (new video loaded). Zoom / pan / marker edits paint the final state
+    // immediately — matches the old behavior where React reused existing
+    // <rect>s and didn't re-fire the CSS keyframes.
+    const doStagger = lastWaveformDataRef.current !== waveformData;
+    lastWaveformDataRef.current = waveformData;
+
+    const RISE_MS = 380;
+    const mountedAt = performance.now();
+    let rafId = 0;
+
+    // Matches the original cubic-bezier(0.25, 0.9, 0.3, 1) closely enough
+    // for the human eye; the intro is <200ms so a cheap ease-out is fine.
+    const easeOut = (t: number) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
+
+    const drawFrame = (progressMs: number | null): boolean => {
+      ctx.clearRect(0, 0, cssW, cssH);
+
+      ctx.fillStyle = '#f0abfc';
+      for (const p of packs) {
+        if (p.widthPx <= 0) continue;
+        ctx.fillRect(p.leftPx, 0, p.widthPx, STRIP_H);
+      }
+
+      // All bars batched into one path → a single fill call for the whole
+      // strip, regardless of bar count. This is the hot path during the
+      // intro animation.
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.82)';
+      ctx.beginPath();
+      let allDone = true;
+      for (const p of packs) {
+        for (const b of p.bars) {
+          let s: number;
+          if (progressMs == null) {
+            s = 1;
+          } else {
+            s = easeOut((progressMs - b.delay) / RISE_MS);
+            if (s < 1) allDone = false;
+          }
+          const halfH = b.halfH * s;
+          if (halfH < 0.25) continue;
+          const r = Math.min(b.w / 2, 1.2);
+          addRoundedRectPath(ctx, b.x, midY - halfH, b.w, halfH * 2, r);
+        }
+      }
+      ctx.fill();
+      return allDone;
+    };
+
+    if (doStagger) {
+      const tick = () => {
+        const done = drawFrame(performance.now() - mountedAt);
+        if (!done) rafId = requestAnimationFrame(tick);
+      };
+      rafId = requestAnimationFrame(tick);
+    } else {
+      drawFrame(null);
+    }
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [segments, waveformData, pxPerSec, videoDur, innerW]);
 
   const derivedDisplayTime = displayTimeFromVideoTime(currentTime);
 
@@ -647,10 +718,31 @@ export function Timeline({
                 }}
                 onMouseDown={isLoading ? undefined : onStripMouseDown}
               >
-                {/* Waveform segments. Memoized — see `waveformSvg` above.
-                    Independent of currentTime/playhead so timeupdate ticks
-                    don't rerender the 300+ <rect>s. */}
-                {waveformSvg}
+                {/* Waveform — drawn to a single <canvas> (see the effect
+                    wiring `waveformCanvasRef` above). Independent of
+                    currentTime/playhead, so timeupdate ticks never trigger
+                    a repaint of the bars; the played-region overlay below
+                    handles the brightness split. */}
+                <canvas
+                  ref={waveformCanvasRef}
+                  className="absolute inset-0 pointer-events-none"
+                />
+                {/* Empty-state shimmer. Only rendered before waveformData
+                    arrives from the backend; once it's in, the canvas
+                    takes over and these divs unmount. */}
+                {waveformData.length === 0 && segments.map((seg, i) => (
+                  <div
+                    key={`sh-${i}`}
+                    className="absolute top-0 bottom-0 waveform-shimmer"
+                    style={{
+                      left: seg.displayStart * pxPerSec,
+                      width: (seg.displayEnd - seg.displayStart) * pxPerSec,
+                      background:
+                        'linear-gradient(180deg, #f0abfc 0%, #e879f9 50%, #f0abfc 100%)',
+                      pointerEvents: 'none',
+                    }}
+                  />
+                ))}
 
                 {/* Played-region overlay. One element; its width is the only
                     thing that updates on timeupdate. The low-alpha white
