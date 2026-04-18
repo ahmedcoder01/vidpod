@@ -1,7 +1,7 @@
 'use client';
 
-import { useRef, useEffect, useState, useMemo, useLayoutEffect, startTransition } from 'react';
-import { TimelineProps, STRIP_H, FRAME_PAD } from './timeline-types';
+import { useRef, useEffect, useState, useMemo, useLayoutEffect, useCallback, startTransition } from 'react';
+import { TimelineProps, STRIP_H, FRAME_PAD, TYPE_CFG } from './timeline-types';
 import { hms, clamp } from './timeline-utils';
 import { useAdLayout } from './use-ad-layout';
 import { useWaveformCanvas } from './use-waveform-canvas';
@@ -48,6 +48,24 @@ export function Timeline({
   const playheadLineRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<HTMLDivElement>(null);
   const playedOverlayRef = useRef<HTMLDivElement>(null);
+
+  // Ghost drag refs. The ghost block lives in the outer wrapper (outside
+  // stripRef) so overflow:hidden doesn't clip its elevated shadow.
+  // ghostCallbackRef is a callback ref that handles the "ref not yet mounted
+  // on first mousemove" race: the hook writes to ghostPendingPos when the DOM
+  // node is null; once React commits the ghost, the callback applies it.
+  const ghostDomRef = useRef<HTMLDivElement | null>(null);
+  const ghostPendingPos = useRef<{ left: number; width: number } | null>(null);
+  const ghostTimeLabelRef = useRef<HTMLDivElement>(null);
+
+  const ghostCallbackRef = useCallback((el: HTMLDivElement | null) => {
+    ghostDomRef.current = el;
+    if (el && ghostPendingPos.current) {
+      el.style.left = `${ghostPendingPos.current.left}px`;
+      el.style.width = `${ghostPendingPos.current.width}px`;
+      ghostPendingPos.current = null;
+    }
+  }, []);
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -105,6 +123,7 @@ export function Timeline({
     innerW,
     totalDur,
     videoDur,
+    pxPerSec,
     adLayout,
     onSeek,
     onSeekIntoAd,
@@ -116,6 +135,9 @@ export function Timeline({
     playheadLineRef,
     handleRef,
     playedOverlayRef,
+    ghostDomRef,
+    ghostTimeLabelRef,
+    ghostPendingPos,
     scrubbingRef,
     setSelectedId,
     setDraggingId,
@@ -167,12 +189,22 @@ export function Timeline({
   const playheadTransition = smoothPlayhead ? 'left 0.25s linear' : 'none';
   const playedOverlayTransition = smoothPlayhead ? 'width 0.25s linear' : 'none';
 
-  // Clear the optimistic override once the video reports back — but only
-  // when no drag is in flight, otherwise we yank the playhead to the stale
-  // timeupdate position between every mousemove.
+  // Keep the optimistic override pinned at the user's intended position
+  // until the video's `currentTime` has actually caught up to it. HLS
+  // playback snaps seeks to the nearest keyframe (~0.1–0.2s earlier), so
+  // clearing `pendingDisplayTime` on the first `timeupdate` after release
+  // would yank the playhead visibly backward from where the user dropped
+  // it. We clear only once the derived display-time is at (or past) the
+  // pending value. If the video is paused at a snapped-back position, the
+  // override persists — the playhead stays put until the user hits play
+  // and natural forward motion catches up.
   useEffect(() => {
-    if (!scrubbingRef.current) setPendingDisplayTime(null);
-  }, [currentTime]);
+    if (scrubbingRef.current || pendingDisplayTime == null) return;
+    const derivedDT = displayTimeFromVideoTime(currentTime);
+    if (derivedDT >= pendingDisplayTime - 0.15) {
+      setPendingDisplayTime(null);
+    }
+  }, [currentTime, pendingDisplayTime, displayTimeFromVideoTime]);
 
   // ── Zoom ───────────────────────────────────────────────────────────────────
   const bumpZoom = (delta: number) =>
@@ -223,6 +255,11 @@ export function Timeline({
     }
   }, [playheadPx, scrubbing]);
 
+  // Ghost drag marker — which adLayout item is being dragged right now.
+  // Computed once when draggingId flips; stable for the duration of the drag
+  // since onMarkerMove is NOT called during drag (no adLayout change).
+  const ghostItem = draggingId ? adLayout.find(a => a.m.id === draggingId) ?? null : null;
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_16px_rgba(0,0,0,0.04)] overflow-hidden">
@@ -257,7 +294,7 @@ export function Timeline({
                 style={{
                   height: STRIP_H,
                   background: '#0a0a0a',
-                  cursor: isLoading ? 'wait' : scrubbing ? 'grabbing' : 'crosshair',
+                  cursor: isLoading ? 'wait' : scrubbing ? 'grabbing' : draggingId ? 'grabbing' : 'crosshair',
                 }}
                 onMouseDown={isLoading ? undefined : onStripMouseDown}
               >
@@ -360,6 +397,82 @@ export function Timeline({
               </div>
             </div>
 
+            {/* Ghost drag marker — floats above the strip, outside overflow:hidden.
+                Positioned in the outer wrapper so its elevated shadow is visible.
+                Content mirrors the real marker; position is updated imperatively. */}
+            {ghostItem && (() => {
+              const cfg = TYPE_CFG[ghostItem.m.type];
+              const thumbId = ghostItem.m.adIds?.[0];
+              const thumb = thumbId ? AD_INFO[thumbId]?.thumb : undefined;
+              return (
+                <div
+                  ref={ghostCallbackRef}
+                  className="absolute select-none pointer-events-none"
+                  style={{
+                    top: FRAME_PAD + 2,
+                    height: STRIP_H - 4,
+                    left: -9999,  // off-screen until first imperative write
+                    width: 0,     // set imperatively in startMarkerDrag
+                    zIndex: 55,
+                    borderRadius: 3,
+                    overflow: 'hidden',
+                    background: cfg.bgHi,
+                    outline: '2px solid rgba(255,255,255,0.92)',
+                    outlineOffset: -2,
+                    boxShadow: '0 10px 32px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2)',
+                    transform: 'translateY(-2px)',
+                  }}
+                >
+                  {/* Type badge */}
+                  <div
+                    className="absolute top-1.5 left-1.5 flex items-center justify-center font-bold"
+                    style={{
+                      background: '#ffffff',
+                      color: cfg.badgeText,
+                      border: `1px solid ${cfg.badgeBorder}`,
+                      fontSize: 10,
+                      minWidth: ghostItem.m.type === 'ab' ? 26 : 18,
+                      height: 16,
+                      padding: '0 4px',
+                      borderRadius: 4,
+                      letterSpacing: '0.04em',
+                      lineHeight: 1,
+                    }}
+                  >
+                    {cfg.label}
+                  </div>
+
+                  {/* Thumbnail (static) */}
+                  {ghostItem.m.type === 'static' && thumb && (
+                    <div className="absolute inset-0 flex items-center justify-center px-1">
+                      <img
+                        src={thumb}
+                        alt=""
+                        draggable={false}
+                        className="object-cover rounded-md shadow-md"
+                        style={{ maxWidth: 'calc(100% - 6px)', maxHeight: 58 }}
+                      />
+                    </div>
+                  )}
+
+                  {/* Dot grid handle */}
+                  <div
+                    className="absolute bottom-1.5 left-1/2 -translate-x-1/2"
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(3, 3px)',
+                      gridTemplateRows: 'repeat(2, 3px)',
+                      gap: 2.5,
+                    }}
+                  >
+                    {Array.from({ length: 6 }).map((_, k) => (
+                      <div key={k} style={{ width: 3, height: 3, borderRadius: 999, background: cfg.handle }} />
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Playhead top handle */}
             <div
               ref={handleRef}
@@ -429,6 +542,28 @@ export function Timeline({
                   </div>
                 );
               })}
+
+              {/* Ghost drag time indicator — updated imperatively, hidden when not dragging */}
+              <div
+                ref={ghostTimeLabelRef}
+                className="absolute top-0 pointer-events-none"
+                style={{ visibility: 'hidden', transform: 'translateX(-50%)', zIndex: 60 }}
+              >
+                <div style={{ width: 2, height: 7, background: '#ef4444', margin: '0 auto' }} />
+                <div
+                  className="mt-0.5 flex items-center gap-1 rounded-md px-1.5 py-0.5"
+                  style={{ background: 'rgba(10,10,10,0.82)', border: '1px solid rgba(255,255,255,0.12)' }}
+                >
+                  <div style={{ width: 5, height: 5, borderRadius: 999, background: '#ef4444', flexShrink: 0 }} />
+                  <span
+                    data-ghost-time
+                    className="font-mono tabular-nums whitespace-nowrap"
+                    style={{ fontSize: 10, color: '#f3f4f6', letterSpacing: '0.04em' }}
+                  >
+                    00:00:00
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </div>

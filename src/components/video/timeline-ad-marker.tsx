@@ -41,7 +41,7 @@ export function AdMarkerBlock({
   const thumb = thumbId ? AD_INFO[thumbId]?.thumb : undefined;
   const narrow = widthPx < 60;
   const outline = isDrag
-    ? '2px solid rgba(255,255,255,0.85)'
+    ? '2px dashed rgba(255,255,255,0.35)'
     : isSel
     ? '2px solid #ffffff'
     : 'none';
@@ -59,7 +59,8 @@ export function AdMarkerBlock({
         top: 2,
         bottom: 2,
         width: widthPx,
-        background: isHov || isDrag || isSel ? cfg.bgHi : cfg.bg,
+        background: isHov || isSel ? cfg.bgHi : cfg.bg,
+        opacity: isDrag ? 0.25 : 1,
         cursor: isDrag ? 'grabbing' : 'grab',
         zIndex: isDrag ? 30 : isSel ? 25 : isHov ? 20 : 15,
         borderRadius: 3,

@@ -49,6 +49,13 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   const dragging = useRef(false);
   const hitMarkers = useRef<Set<string>>(new Set());
   const wasPlayingBeforeAd = useRef(false);
+  // Previous `currentTime` snapshot for the forward-crossing detector.
+  // Updated on every `timeupdate` and on every explicit seek so the next
+  // tick compares against the right baseline.
+  const prevTimeRef = useRef(0);
+  // While true (set by `setScrubbing`), crossings are recorded as `hit`
+  // but ads don't fire — drags past a marker "skip" rather than "play."
+  const suppressAdFireRef = useRef(false);
   // Whether *any* video (main or ad) was playing at the moment a scrub
   // began. Restored on release so "I was watching → grabbed the
   // playhead → dropped it somewhere new" keeps playing at the new
@@ -87,11 +94,69 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     [adsById],
   );
 
+  // Skip-semantics bookkeeping for explicit seeks: forward seeks mark any
+  // crossed markers as `hit` (so they don't re-fire on resume); backward
+  // seeks clear `hit` for markers past the new position (re-enabling them
+  // for the next forward play — standard DVR UX).
+  const applyHitMarkersForSeek = (prev: number, newT: number) => {
+    if (newT > prev) {
+      for (const m of adMarkers) {
+        if (prev < m.startTime && m.startTime <= newT) {
+          hitMarkers.current.add(m.id);
+        }
+      }
+    } else if (newT < prev) {
+      for (const m of adMarkers) {
+        if (m.startTime > newT) {
+          hitMarkers.current.delete(m.id);
+        }
+      }
+    }
+  };
+
+  // Shared by all "just jump" code paths (imperative seek, internal progress
+  // bar, jump-to-start/end buttons). Never bypasses hit-tracking — any raw
+  // `v.currentTime = X` elsewhere leaves hitMarkers inconsistent and makes
+  // subsequent +10s seeks silently skip ads they should fire.
+  const skipSeek = (t: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const prev = v.currentTime;
+    const newT = clamp(t, 0, v.duration || t);
+    applyHitMarkersForSeek(prev, newT);
+    v.currentTime = newT;
+    prevTimeRef.current = newT;
+  };
+
+  // Synchronously commits all state mutations for "an ad just started at
+  // marker m." Centralizes the dance so natural crossings and +10s step
+  // fires stay in sync — including the crucial `onAdProgress({elapsed:0})`
+  // that keeps the Timeline's playhead pinned to the ad block instead of
+  // briefly showing derivedDisplayTime during the render gap before the
+  // first adV timeupdate.
+  const fireAdSession = (m: AdMarker, ad: Ad) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = m.startTime;
+    prevTimeRef.current = m.startTime;
+    hitMarkers.current.add(m.id);
+    wasPlayingBeforeAd.current = !v.paused;
+    v.pause();
+    setCurrentTime(m.startTime);
+    onTimeUpdate?.(m.startTime);
+    setAdElapsed(0);
+    setAdCanSkipAt(Math.min(5, Math.floor(ad.duration / 3)) || 0);
+    setAdSession({ ad, marker: m });
+    onAdProgress?.({ markerId: m.id, elapsed: 0 });
+  };
+
   useImperativeHandle(ref, () => ({
     getCurrentTime: () => videoRef.current?.currentTime ?? 0,
     seek: (t) => {
       const v = videoRef.current;
       if (!v) return;
+
+      const newT = clamp(t, 0, v.duration || t);
 
       // If we were mid-ad, cancel the session and inherit its playing state
       // for the main video. The ad <video> is about to unmount, so the
@@ -100,14 +165,19 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       if (adSessionRef.current) {
         const adV = adVideoRef.current;
         const wasAdPlaying = adV ? !adV.paused : false;
+        const currentMarker = adSessionRef.current.marker;
         setAdSession(null);
         setAdElapsed(0);
         onAdProgress?.(null);
 
-        v.currentTime = t;
-        hitMarkers.current = new Set(
-          adMarkers.filter((m) => m.startTime <= t + 0.005).map((m) => m.id),
-        );
+        const prev = v.currentTime;
+        // Mark the just-exited ad so it doesn't auto-fire when playback
+        // resumes, then apply normal directional hit-bookkeeping.
+        hitMarkers.current.add(currentMarker.id);
+        applyHitMarkersForSeek(prev, newT);
+
+        v.currentTime = newT;
+        prevTimeRef.current = newT;
 
         if (wasAdPlaying) {
           // onPlay listener will flip `playing` back to true once it fires.
@@ -119,10 +189,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         return;
       }
 
-      v.currentTime = t;
-      hitMarkers.current = new Set(
-        adMarkers.filter((m) => m.startTime <= t + 0.005).map((m) => m.id),
-      );
+      const prev = v.currentTime;
+      applyHitMarkersForSeek(prev, newT);
+      v.currentTime = newT;
+      prevTimeRef.current = newT;
     },
     seekIntoAd: (markerId, elapsed) => {
       const m = adMarkers.find((x) => x.id === markerId);
@@ -165,6 +235,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     play: () => { videoRef.current?.play().catch(() => {}); },
     pause: () => videoRef.current?.pause(),
     setScrubbing: (active: boolean) => {
+      // Suppresses ad firing for the duration of a scrub. Crossings that
+      // happen while suppressed still get recorded as `hit` (by onTime),
+      // so they don't spuriously fire when playback resumes forward.
+      suppressAdFireRef.current = active;
       const v = videoRef.current;
       const adV = adVideoRef.current;
       if (active) {
@@ -200,23 +274,30 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       // it's paused but we still want the displayed time to freeze at the
       // ad-boundary and not flicker.
       if (adSessionRef.current) return;
-      setCurrentTime(v.currentTime);
-      onTimeUpdate?.(v.currentTime);
+      const prev = prevTimeRef.current;
+      const now = v.currentTime;
+      prevTimeRef.current = now;
+
+      setCurrentTime(now);
+      onTimeUpdate?.(now);
+
+      // Only forward motion can cross a marker. Works identically for
+      // natural playback ticks, step-forward seeks, and drag scrubs — the
+      // `suppressAdFireRef` flag below is what differentiates skip vs play.
+      if (now <= prev) return;
 
       for (const m of adMarkers) {
         if (hitMarkers.current.has(m.id)) continue;
-        // Forward-only window — catches the boundary crossing without
-        // mis-firing when the user seeks back to before the marker.
-        if (v.currentTime >= m.startTime && v.currentTime - m.startTime < 1.5) {
-          hitMarkers.current.add(m.id);
+        if (prev < m.startTime && m.startTime <= now) {
+          if (suppressAdFireRef.current) {
+            // Drag/scrub past marker: record as hit, don't fire.
+            hitMarkers.current.add(m.id);
+            continue;
+          }
           const ad = resolveAdForMarker(m);
-          if (!ad) continue; // no asset assigned → treat marker as no-op
-          wasPlayingBeforeAd.current = !v.paused;
-          v.pause();
-          setAdElapsed(0);
-          setAdCanSkipAt(Math.min(5, Math.floor(ad.duration / 3)) || 0);
-          setAdSession({ ad, marker: m });
-          break;
+          if (!ad) { hitMarkers.current.add(m.id); continue; }
+          fireAdSession(m, ad);
+          return;  // fire at most one ad per tick
         }
       }
     };
@@ -224,6 +305,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       setDuration(v.duration || 0);
       setVideoError(null);
       onDurationChange?.(v.duration || 0);
+      // Seed the crossing-detector baseline with the actual initial position
+      // so a non-zero resume point doesn't fire every marker before it.
+      prevTimeRef.current = v.currentTime;
     };
     const onPlay = () => {
       if (adSessionRef.current) return; // play state during ad is driven by ad video
@@ -342,21 +426,43 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     else v.pause();
   }, []);
 
+  // Play-semantics seek: used by the +10s / −10s step buttons. A forward
+  // step that crosses an uncrossed marker FIRES the ad at that marker; the
+  // video resumes at the marker's startTime after the ad ends. A backward
+  // step clears hit state for markers past the new position so they
+  // re-fire on the next forward play. (Plain drag-scrubs use `seek` with
+  // skip-semantics.)
   function seekBy(delta: number) {
-    if (adSession) return; // ignore main-video seeks while ad is playing
+    if (adSession) return;
     const v = videoRef.current;
     if (!v) return;
-    v.currentTime = clamp(v.currentTime + delta, 0, v.duration);
+    const prev = v.currentTime;
+    const newT = clamp(prev + delta, 0, v.duration || prev + delta);
+
+    if (delta > 0) {
+      // Find the first uncrossed marker in (prev, newT] and fire its ad.
+      const sorted = [...adMarkers].sort((a, b) => a.startTime - b.startTime);
+      for (const m of sorted) {
+        if (hitMarkers.current.has(m.id)) continue;
+        if (prev < m.startTime && m.startTime <= newT) {
+          const ad = resolveAdForMarker(m);
+          if (!ad) { hitMarkers.current.add(m.id); continue; }
+          fireAdSession(m, ad);
+          return;
+        }
+      }
+    }
+
+    // No ad fired — plain skip-seek (marks forward crossings hit, clears
+    // backward ones so rewound ads become re-fireable).
+    skipSeek(newT);
   }
 
   function seekToClientX(clientX: number) {
     const rect = progressRef.current?.getBoundingClientRect();
     const v = videoRef.current;
     if (!rect || !v || !v.duration) return;
-    v.currentTime = clamp((clientX - rect.left) / rect.width, 0, 1) * v.duration;
-    hitMarkers.current = new Set(
-      adMarkers.filter((m) => m.startTime <= v.currentTime + 0.005).map((m) => m.id),
-    );
+    skipSeek(clamp((clientX - rect.left) / rect.width, 0, 1) * v.duration);
   }
 
   function handleProgressMouseDown(e: React.MouseEvent<HTMLDivElement>) {
@@ -495,7 +601,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           Undo/Redo so the page reads as one consistent control family. */}
       <div className="px-4 py-2.5 flex items-center justify-between gap-2">
         <button
-          onClick={() => { if (!adSession && videoRef.current) videoRef.current.currentTime = 0; }}
+          onClick={() => { if (!adSession) skipSeek(0); }}
           disabled={!!adSession}
           title="Jump to start"
           className="flex items-center gap-1.5 text-[13px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"
@@ -576,7 +682,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         </div>
 
         <button
-          onClick={() => { if (!adSession) { const v = videoRef.current; if (v) v.currentTime = v.duration; } }}
+          onClick={() => { const v = videoRef.current; if (!adSession && v) skipSeek(v.duration); }}
           disabled={!!adSession}
           title="Jump to end"
           className="flex items-center gap-1.5 text-[13px] text-gray-700 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition active:scale-95"

@@ -1,12 +1,13 @@
 import { useCallback, RefObject, MutableRefObject } from 'react';
 import { AdMarker } from '@/lib/types';
 import { AdLayoutItem, TimelineProps, FRAME_PAD } from './timeline-types';
-import { clamp } from './timeline-utils';
+import { clamp, hms } from './timeline-utils';
 
 interface UseTimelineInteractionsArgs {
   innerW: number;
   totalDur: number;
   videoDur: number;
+  pxPerSec: number;
   adLayout: AdLayoutItem[];
   onSeek: TimelineProps['onSeek'];
   onSeekIntoAd: TimelineProps['onSeekIntoAd'];
@@ -18,6 +19,12 @@ interface UseTimelineInteractionsArgs {
   playheadLineRef: RefObject<HTMLDivElement | null>;
   handleRef: RefObject<HTMLDivElement | null>;
   playedOverlayRef: RefObject<HTMLDivElement | null>;
+  // Ghost drag refs — ghost block and ruler time indicator (both live outside
+  // stripRef so they aren't clipped by overflow:hidden)
+  ghostDomRef: MutableRefObject<HTMLDivElement | null>;
+  ghostTimeLabelRef: RefObject<HTMLDivElement | null>;
+  // Pending initial position for the ghost before React commits the DOM node
+  ghostPendingPos: MutableRefObject<{ left: number; width: number } | null>;
   scrubbingRef: MutableRefObject<boolean>;
   setSelectedId: (id: string | null) => void;
   setDraggingId: (id: string | null) => void;
@@ -29,6 +36,7 @@ export function useTimelineInteractions({
   innerW,
   totalDur,
   videoDur,
+  pxPerSec,
   adLayout,
   onSeek,
   onSeekIntoAd,
@@ -40,6 +48,9 @@ export function useTimelineInteractions({
   playheadLineRef,
   handleRef,
   playedOverlayRef,
+  ghostDomRef,
+  ghostTimeLabelRef,
+  ghostPendingPos,
   scrubbingRef,
   setSelectedId,
   setDraggingId,
@@ -147,34 +158,113 @@ export function useTimelineInteractions({
     e.preventDefault();
     e.stopPropagation();
     setSelectedId(m.id);
-    setDraggingId(m.id);
-    const startX = e.clientX;
-    const startTime = m.startTime;
+    setDraggingId(m.id);  // triggers React render → ghost mounts → ghostCallbackRef fires
+
     const adDur = getAdDuration(m);
 
-    // Snapshot the zoom scale at drag-start. clientX is visual-space
-    // (post-zoom) but innerW / style.left are logical-space (pre-zoom).
-    // Without this correction the marker moves faster than the cursor
-    // by the zoom factor.
-    const stripEl = stripRef.current;
-    const stripRect = stripEl?.getBoundingClientRect();
-    const scale = stripEl && stripRect && stripEl.clientWidth > 0
-      ? stripRect.width / stripEl.clientWidth : 1;
+    // Compute ghost geometry at drag-start (pxPerSec is snapshotted from
+    // this render's value — stays consistent for the whole drag).
+    const rawWidth = adDur * pxPerSec;
+    const gap = Math.min(3, Math.max(0, (rawWidth - 4) / 2));
+    const ghostWidth = Math.max(3, rawWidth - gap * 2);
+
+    // Click offset: distance from the ghost's left edge to where the user
+    // clicked. Keeps the ghost block visually "stuck" under the cursor
+    // at the same relative position rather than snapping to its left edge.
+    const a = adLayout.find(x => x.m.id === m.id);
+    const ghostMarkerLeft = a ? a.displayStart * pxPerSec + gap : 0;
+    const stripX = stripOffsetFromClientX(e.clientX) ?? ghostMarkerLeft;
+    const clickOffset = clamp(stripX - ghostMarkerLeft, 0, ghostWidth);
+
+    const initialLeft = clamp(stripX - clickOffset, 0, innerW - ghostWidth);
+
+    // Position the ghost DOM node if already mounted, otherwise queue it for
+    // the callback ref that fires after React commits this render.
+    if (ghostDomRef.current) {
+      ghostDomRef.current.style.left = `${initialLeft}px`;
+      ghostDomRef.current.style.width = `${ghostWidth}px`;
+    } else {
+      ghostPendingPos.current = { left: initialLeft, width: ghostWidth };
+    }
+
+    // Compute the target videoTime for a given ghost-left, EXCLUDING the
+    // dragging marker from the layout. Using `videoTimeFromDisplayTime`
+    // directly would subtract the dragging marker's own duration when the
+    // drop lands past its original block — the marker would land adDur
+    // seconds to the LEFT of where the user dropped, and the parent's ad
+    // trigger (1.5s forward window) would never catch it on replay.
+    const others = adLayout.filter(x => x.m.id !== m.id);
+    const computeDropVt = (ghostLeft: number): number => {
+      const ghostDisplayTime = (ghostLeft / innerW) * totalDur;
+      let accOffset = 0;
+      let result = ghostDisplayTime;
+      for (const o of others) {
+        const oDisplayStart = o.m.startTime + accOffset;
+        const oDisplayEnd = oDisplayStart + o.dur;
+        if (ghostDisplayTime < oDisplayStart) {
+          return Math.max(0, ghostDisplayTime - accOffset);
+        }
+        if (ghostDisplayTime < oDisplayEnd) {
+          // Ghost inside another marker's block — snap before/after based on midpoint
+          const mid = oDisplayStart + o.dur / 2;
+          return ghostDisplayTime < mid
+            ? Math.max(0, o.m.startTime - 0.01)
+            : o.m.startTime + 0.01;
+        }
+        accOffset += o.dur;
+        result = ghostDisplayTime - accOffset;
+      }
+      return Math.max(0, result);
+    };
+
+    // Helper to write the ruler time indicator imperatively.
+    const updateLabel = (ghostLeft: number) => {
+      const labelEl = ghostTimeLabelRef.current;
+      if (!labelEl) return;
+      labelEl.style.left = `${ghostLeft + ghostWidth / 2}px`;
+      labelEl.style.visibility = 'visible';
+      const vt = computeDropVt(ghostLeft);
+      const span = labelEl.querySelector<HTMLElement>('[data-ghost-time]');
+      if (span) span.textContent = hms(clamp(vt, 0, videoDur));
+    };
+    updateLabel(initialLeft);
 
     const onMove = (ev: MouseEvent) => {
-      const dx = (ev.clientX - startX) / (scale || 1);
-      const dt = (dx / innerW) * totalDur;
-      const newTime = clamp(startTime + dt, 0, Math.max(0, videoDur - adDur));
-      onMarkerMove(m.id, newTime);
+      const newStripX = stripOffsetFromClientX(ev.clientX) ?? 0;
+      const newLeft = clamp(newStripX - clickOffset, 0, innerW - ghostWidth);
+
+      if (ghostDomRef.current) {
+        ghostDomRef.current.style.left = `${newLeft}px`;
+      } else {
+        // Ghost not yet mounted — queue for callback ref.
+        ghostPendingPos.current = { left: newLeft, width: ghostWidth };
+      }
+      updateLabel(newLeft);
     };
+
     const onUp = () => {
-      setDraggingId(null);
+      // Read final ghost position and commit the single state update.
+      const finalLeft = parseFloat(ghostDomRef.current?.style.left ?? String(initialLeft));
+      const vt = computeDropVt(finalLeft);
+      onMarkerMove(m.id, clamp(vt, 0, Math.max(0, videoDur - adDur)));
+
+      // Hide ruler label before the ghost unmounts.
+      const labelEl = ghostTimeLabelRef.current;
+      if (labelEl) labelEl.style.visibility = 'hidden';
+
+      ghostPendingPos.current = null;
+      setDraggingId(null);  // unmounts ghost, restores real marker appearance
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
+
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [setSelectedId, setDraggingId, getAdDuration, stripRef, innerW, totalDur, videoDur, onMarkerMove]);
+  }, [
+    setSelectedId, setDraggingId, getAdDuration, pxPerSec, adLayout,
+    stripOffsetFromClientX, ghostDomRef, ghostTimeLabelRef, ghostPendingPos,
+    innerW, totalDur, videoDur, onMarkerMove,
+  ]);
 
   return { beginScrub, onStripMouseDown, startPlayheadDrag, startMarkerDrag };
 }

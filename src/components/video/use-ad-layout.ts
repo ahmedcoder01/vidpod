@@ -119,6 +119,27 @@ export function useAdLayout(
     if (changed) completedAdsRef.current = next;
   }
 
+  // Markers the user crossed WITHOUT triggering an ad session (scrub-past,
+  // step-past, jump-past) need to count toward the display-time offset too,
+  // otherwise the playhead sits at the marker's displayStart even though the
+  // video has moved well past it. We treat a marker as "effectively completed"
+  // once `currentTime` is >0.5s past its startTime and no ad session is
+  // active for it. The 0.5s guard preserves the one-frame race protection
+  // for natural crossings — those fire adProgress within ~100ms, well under
+  // the threshold.
+  if (!adProgress) {
+    let next = completedAdsRef.current;
+    let changed = false;
+    for (const a of sortedIdx) {
+      if (a.m.startTime >= currentTime - 0.5) break;
+      if (!next.has(a.m.id)) {
+        if (!changed) { next = new Set(next); changed = true; }
+        next.add(a.m.id);
+      }
+    }
+    if (changed) completedAdsRef.current = next;
+  }
+
   // Classify the latest `currentTime` delta: small forward step = natural
   // playback (smooth it); anything else = seek / reverse (snap).
   // Read before the effect updates the ref so callers see the pre-render value.
