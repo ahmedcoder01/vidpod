@@ -167,6 +167,21 @@ export function Timeline({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
+  // Synchronous companion to the `scrubbing` state. Flipped inline with the
+  // mousedown handler so the pending-clear effect below sees the correct
+  // value on the very first `timeupdate` after drag start — a `useEffect`
+  // that mirrors state would still read `false` there and null the override,
+  // bouncing the playhead backwards between mousemoves.
+  const scrubbingRef = useRef(false);
+  // Direct refs to the three DOM nodes that represent the playhead. During
+  // an active drag we write their `style.left` / `style.width` imperatively
+  // in the mousemove handler, at the browser's input frame rate, instead
+  // of waiting on React's render cycle. This is the only way to get a
+  // feel that's truly pinned to the cursor on a timeline with a heavy
+  // waveform canvas + many markers.
+  const playheadLineRef = useRef<HTMLDivElement>(null);
+  const handleRef = useRef<HTMLDivElement>(null);
+  const playedOverlayRef = useRef<HTMLDivElement>(null);
   const [visibleW, setVisibleW] = useState(900);
 
   useLayoutEffect(() => {
@@ -470,10 +485,59 @@ export function Timeline({
   const playedOverlayTransition = smoothPlayhead ? 'width 0.25s linear' : 'none';
 
   // Whenever the video actually reports a new currentTime, clear the pending
-  // optimistic override so the displayed playhead tracks real playback.
+  // optimistic override so the displayed playhead tracks real playback —
+  // UNLESS a drag is still in flight. During a scrub the video's timeupdate
+  // lags the cursor by 100–250 ms; nulling the override here would yank the
+  // playhead to the stale position between every mousemove, which reads as
+  // the playhead "drifting" behind the cursor. The ref is flipped inline
+  // with the mouse handlers so this effect sees it on the first tick.
   useEffect(() => {
-    setPendingDisplayTime(null);
+    if (!scrubbingRef.current) setPendingDisplayTime(null);
   }, [currentTime]);
+
+  // Convert a viewport-space `clientX` into a logical-pixel offset inside
+  // the timeline strip. Essential when a CSS `zoom` is applied to any
+  // ancestor (e.g. `html { zoom: 1.1 }` on this app): `clientX` and
+  // `getBoundingClientRect()` live in visual (post-zoom) space, while
+  // `clientWidth` and anything we assign to `style.left` live in logical
+  // (pre-zoom) space. Without compensating for the ratio the playhead
+  // drifts by the zoom factor and the gap grows with cursor position.
+  const stripOffsetFromClientX = useCallback(
+    (clientX: number): number | null => {
+      const el = stripRef.current;
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      const scale = el.clientWidth > 0 ? rect.width / el.clientWidth : 1;
+      return clamp((clientX - rect.left) / (scale || 1), 0, innerW);
+    },
+    [innerW],
+  );
+
+  // Paint the three playhead DOM nodes imperatively for zero-latency cursor
+  // tracking. Also zeroes out `transition` on each element first — if the
+  // previous render left `left 0.25s linear` in place (natural playback
+  // smoothing) and a drag begins before React commits the scrubbing state,
+  // the browser would *animate* our imperative write and the playhead
+  // would visibly glide behind the cursor. Clearing `transition` inline
+  // guarantees a snap. The next React render overwrites these inline
+  // styles from JSX, so no cleanup is needed on mouseup.
+  const paintPlayheadAt = useCallback((x: number) => {
+    const line = playheadLineRef.current;
+    const handle = handleRef.current;
+    const overlay = playedOverlayRef.current;
+    if (line) {
+      line.style.transition = 'none';
+      line.style.left = `${x}px`;
+    }
+    if (handle) {
+      handle.style.transition = 'none';
+      handle.style.left = `${x + FRAME_PAD}px`;
+    }
+    if (overlay) {
+      overlay.style.transition = 'none';
+      overlay.style.width = `${Math.max(0, x)}px`;
+    }
+  }, []);
 
   // ── Ticks ──────────────────────────────────────────────────────────────
   const { majorStep, minorStep } = useMemo(() => {
@@ -509,25 +573,46 @@ export function Timeline({
   }, [totalDur, minorStep, majorStep]);
 
   // ── Interactions ───────────────────────────────────────────────────────
-  function seekFromClientX(clientX: number): number {
-    const rect = stripRef.current?.getBoundingClientRect();
-    if (!rect) return 0;
-    const x = clamp(clientX - rect.left, 0, innerW);
+  // Core: map a logical strip offset to a display-time, route the seek
+  // (into an ad block or onto the main video), and update pending. Pure
+  // state + callback work — no DOM writes. The visual update is handled
+  // separately by `paintPlayheadAt` so it can run at input-frame rate.
+  function applySeekAtX(x: number) {
     const dt = (x / innerW) * totalDur;
-    setPendingDisplayTime(dt); // instant visual
+    setPendingDisplayTime(dt);
 
-    // Did the click land inside an ad block? If so, route it to the ad
-    // session handler instead of seeking the main video past the ad.
     const inAd = adLayout.find((a) => dt >= a.displayStart && dt < a.displayEnd);
     if (inAd && onSeekIntoAd) {
       const elapsed = Math.max(0, Math.min(inAd.dur, dt - inAd.displayStart));
       onSeekIntoAd(inAd.m.id, elapsed);
-      return dt;
+      return;
     }
-
     const { vt } = videoTimeFromDisplayTime(dt);
     onSeek(clamp(vt, 0, videoDur));
-    return dt;
+  }
+
+  // Shared drag entry for strip clicks and direct handle grabs. Paints
+  // the playhead synchronously with each mousemove event for a
+  // cursor-attached feel independent of React's render cadence.
+  function beginScrub(firstClientX: number) {
+    scrubbingRef.current = true;
+    setScrubbing(true);
+    const handleAt = (clientX: number) => {
+      const x = stripOffsetFromClientX(clientX);
+      if (x == null) return;
+      paintPlayheadAt(x);   // visual (imperative, no transition)
+      applySeekAtX(x);      // state + video seek
+    };
+    handleAt(firstClientX);
+    const onMove = (ev: MouseEvent) => handleAt(ev.clientX);
+    const onUp = () => {
+      scrubbingRef.current = false;
+      setScrubbing(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   }
 
   function onStripMouseDown(e: React.MouseEvent) {
@@ -535,31 +620,13 @@ export function Timeline({
     // Clicking empty strip deselects any focused ad.
     setSelectedId(null);
     e.preventDefault();
-    setScrubbing(true);
-    seekFromClientX(e.clientX);
-    const onMove = (ev: MouseEvent) => seekFromClientX(ev.clientX);
-    const onUp = () => {
-      setScrubbing(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    beginScrub(e.clientX);
   }
 
   function startPlayheadDrag(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    setScrubbing(true);
-    seekFromClientX(e.clientX);
-    const onMove = (ev: MouseEvent) => seekFromClientX(ev.clientX);
-    const onUp = () => {
-      setScrubbing(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    beginScrub(e.clientX);
   }
 
   function startMarkerDrag(e: React.MouseEvent, m: AdMarker) {
@@ -784,6 +851,7 @@ export function Timeline({
                     brighter, matching the old per-bar opacity split. */}
                 {!isLoading && (
                   <div
+                    ref={playedOverlayRef}
                     className="absolute top-0 bottom-0 pointer-events-none"
                     style={{
                       left: 0,
@@ -934,6 +1002,7 @@ export function Timeline({
                 {/* Playhead line — snaps on click, slides during ad playback */}
                 {!isLoading && (
                   <div
+                    ref={playheadLineRef}
                     className="absolute top-0 bottom-0 pointer-events-none"
                     style={{
                       left: playheadPx,
@@ -980,6 +1049,7 @@ export function Timeline({
 
             {/* Playhead top handle */}
             <div
+              ref={handleRef}
               className="absolute"
               onMouseDown={isLoading ? undefined : startPlayheadDrag}
               style={{
